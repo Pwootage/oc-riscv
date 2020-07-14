@@ -1,0 +1,18 @@
+[
+{
+  "modid": "oc-riscv",
+  "name": "OC Risc-V Arch",
+  "description": "OpenComputers RiscV (rv32gc) Architecture",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["Pwootage"],
+  "credits": "",
+  "logoFile": "",
+  "screenshots": [],
+  "requiredMods": ["forge", "opencomputers", "forgelin"],
+  "dependencies": ["opencomputers", "forgelin"],
+  "useDependencyInformation": "true"
+}
+]

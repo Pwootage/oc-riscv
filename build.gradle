@@ -1,0 +1,82 @@
+buildscript {
+  ext.kotlin_version = '1.3.72'
+  repositories {
+    jcenter()
+    maven {
+      name = "forge"
+      url = "https://files.minecraftforge.net/maven"
+    }
+  }
+  dependencies {
+    classpath 'net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT'
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+  }
+}
+
+apply plugin: 'kotlin'
+//apply plugin: 'scala'
+apply plugin: 'net.minecraftforge.gradle.forge'
+
+version = "1.0"
+group = "com.pwootage.oc.riscv"
+archivesBaseName = "oc-riscv"
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+minecraft {
+  version = "1.12.2-14.23.5.2778"
+  runDir = "run"
+
+  // the mappings can be changed at any time, and must be in the following format.
+  // snapshot_YYYYMMDD   snapshot are built nightly.
+  // stable_#            stables are built at the discretion of the MCP team.
+  mappings = "snapshot_20180704"
+  // makeObfSourceJar = false // an Srg named sources jar is made by default. uncomment this to disable.
+
+  replaceIn "com/pwootage/oc/riscv/OCJS.kt"
+  replace "@VERSION@", project.version
+}
+
+repositories {
+  jcenter()
+  maven { url "https://maven.cil.li/" }
+//  maven { url "http://maven.shadowfacts.net/" }
+}
+
+dependencies {
+//  implementation 'org.scala-lang:scala-library:2.11.11'
+  implementation "li.cil.oc:OpenComputers:MC1.12.2-1.7.+:api"
+  implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
+}
+
+compileKotlin {
+  kotlinOptions {
+    jvmTarget = "1.8"
+    freeCompilerArgs = [
+      "-XXLanguage:+InlineClasses",
+      "-Xopt-in=kotlin.ExperimentalUnsignedTypes"
+    ]
+  }
+}
+
+processResources {
+  // this will ensure that this task is redone when the versions change.
+  inputs.property "version", project.version
+  inputs.property "mcversion", project.minecraft.version
+
+  from(sourceSets.main.resources.srcDirs) {
+    include 'mcmod.info'
+
+    expand 'version': project.version, 'mcversion': project.minecraft.version
+  }
+
+  from(sourceSets.main.resources.srcDirs) {
+    exclude 'mcmod.info'
+  }
+}
+compileTestKotlin {
+  kotlinOptions {
+    jvmTarget = "1.8"
+  }
+}
