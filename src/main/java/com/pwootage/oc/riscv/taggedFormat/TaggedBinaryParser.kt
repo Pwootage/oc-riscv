@@ -1,5 +1,6 @@
 package com.pwootage.oc.riscv.taggedFormat
 
+import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
@@ -8,14 +9,38 @@ import java.util.*
 import javax.swing.text.html.HTML
 
 sealed class TaggedBinary(val id: Byte) {
+  open val value: Any? = null
   object Empty: TaggedBinary(0x00)
-  data class Int8(val value: Byte): TaggedBinary(0x01)
-  data class Int16(val value: Short): TaggedBinary(0x02)
-  data class Int32(val value: Int): TaggedBinary(0x03)
-  data class Int64(val value: Long): TaggedBinary(0x04)
-  data class Int128(val value: UUID): TaggedBinary(0x05)
-  data class Bytes(val value: ByteArray): TaggedBinary(0x06)
+  data class Int8(override val value: Byte): TaggedBinary(0x01)
+  data class Int16(override val value: Short): TaggedBinary(0x02)
+  data class Int32(override val value: Int): TaggedBinary(0x03)
+  data class Int64(override val value: Long): TaggedBinary(0x04)
+  data class Int128(override val value: UUID): TaggedBinary(0x05)
+  data class Bytes(override val value: ByteArray): TaggedBinary(0x06)
   object End: TaggedBinary(0xFF.toByte())
+}
+
+fun List<TaggedBinary>.toBytes(): ByteArray {
+  val baos = ByteArrayOutputStream()
+  for (v in this) baos.writeTaggedBinary(v)
+  return baos.toByteArray()
+}
+
+fun Array<Any?>.toTaggedBinary(): List<TaggedBinary> {
+  val res = mutableListOf<TaggedBinary>()
+  for (v in this) {
+    val tb = when (v) {
+      is String -> TaggedBinary.Bytes(v.toByteArray())
+      is Byte -> TaggedBinary.Int8(v)
+      is Short -> TaggedBinary.Int16(v)
+      is Int -> TaggedBinary.Int32(v)
+      is Long -> TaggedBinary.Int64(v)
+      else -> throw IllegalArgumentException("Unable to convert value!!!")
+    }
+    res.add(tb)
+  }
+  res.add(TaggedBinary.End)
+  return res
 }
 
 fun OutputStream.writeTaggedBinary(b: TaggedBinary) {

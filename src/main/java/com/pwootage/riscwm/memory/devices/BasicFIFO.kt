@@ -3,6 +3,7 @@ package com.pwootage.riscwm.memory.devices
 import com.pwootage.riscwm.memory.MemoryDevice
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.lang.IllegalArgumentException
 
 class BasicFIFO(
   override val start: UInt
@@ -14,6 +15,10 @@ class BasicFIFO(
   private var write_ready = false
   private val writeBuffer = ByteArrayOutputStream()
   private var readBuffer: ByteArrayInputStream? = null
+
+  fun setReadBuffer(v: ByteArray) {
+    readBuffer = ByteArrayInputStream(v)
+  }
 
   fun writeBufferIfReady(): ByteArray? {
     if (write_ready) {
@@ -62,7 +67,12 @@ class BasicFIFO(
 
   override fun write8(offset: UInt, value: Byte) {
     when (offset) {
-      start -> writeBuffer.write(value.toInt())
+      start -> {
+        writeBuffer.write(value.toInt())
+        if (writeBuffer.size() > 16 * 1024) {
+          throw IllegalArgumentException("Wrote too many bytes to FIFO buffer")
+        }
+      }
       start + 2u -> write_ready = (value != 0.toByte())
     }
   }

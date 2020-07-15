@@ -39,11 +39,12 @@ Strings are just `bytes` objects
 
 ## INVOKE `0x00`
 ### INPUT
-* `int128 uuid`
+* `string id`
 * `string 'function_call'`
 * `(param)*`
 * `end`
 ### OUTPUT
+* `int8(isError)` 0=success, 1=error
 * `(result)*`
 * `end`
 

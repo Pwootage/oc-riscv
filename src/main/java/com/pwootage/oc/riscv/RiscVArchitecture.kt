@@ -3,17 +3,21 @@ package com.pwootage.oc.js
 import com.pwootage.oc.riscv.OCRISCV
 import com.pwootage.oc.riscv.taggedFormat.TaggedBinary
 import com.pwootage.oc.riscv.taggedFormat.readTagged
+import com.pwootage.oc.riscv.taggedFormat.toBytes
+import com.pwootage.oc.riscv.taggedFormat.toTaggedBinary
 import com.pwootage.riscwm.RiscWM
 import com.pwootage.riscwm.memory.devices.*
 import li.cil.oc.api.Driver
 import li.cil.oc.api.driver.item.Memory
 import li.cil.oc.api.machine.Architecture
 import li.cil.oc.api.machine.ExecutionResult
+import li.cil.oc.api.machine.LimitReachedException
 import li.cil.oc.api.machine.Machine
 import li.cil.oc.api.network.Component
 import net.minecraft.item.ItemStack
 import net.minecraft.nbt.NBTTagCompound
 import java.io.ByteArrayInputStream
+import java.lang.IllegalStateException
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.CompletableFuture
@@ -21,12 +25,29 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
+sealed class InvokeResult {
+  data class Success(
+    val results: Array<Any?>
+  ) : InvokeResult()
+
+  data class Error(
+    val message: String
+  ) : InvokeResult()
+
+  data class Sync(
+    val id: String,
+    val method: String,
+    val args: Array<Any?>
+  ) : InvokeResult()
+}
+
 @Architecture.Name("Risc-V rv32gc")
 class RiscVArchitecture(val machine: Machine) : Architecture {
   private var _initialized = false
   private var connectedPromise = CompletableFuture<Boolean>()
   private var vm: RiscWM? = null
   private var componentFifo: BasicFIFO? = null
+  private var syncCall: InvokeResult.Sync? = null
 
   override fun isInitialized(): Boolean = _initialized
 
@@ -131,24 +152,148 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
         val data = bois.readTagged()
         tags.add(data)
       }
-//      processComponent
+      val callRes = processComponentCall(tags)
+      if (callRes != null) {
+        return callRes
+      }
     }
 
     return ExecutionResult.Error("Not yet implemented ;)")
   }
 
   override fun runSynchronized() {
-    // TODO
+    val sc = syncCall
+    syncCall = null
+    if (sc != null) {
+      val r = invoke(sc.id, sc.method, sc.args)
+      if (r != null) {
+        throw IllegalStateException("Somehow managed to get a sync call during a sync call")
+      }
+    }
   }
 
-  private fun <T> withComponent(address: String, f: (Component) -> T): T = connected {
+  private fun processComponentCall(tags: List<TaggedBinary>): ExecutionResult? {
+    if (tags.isEmpty()) {
+      return ExecutionResult.Error("Invalid component call: no data provided")
+    }
+    if (tags.last() !is TaggedBinary.End) {
+      return ExecutionResult.Error("Invalid component call: last param must be End")
+    }
+    val first = tags[0]
+    if (first !is TaggedBinary.Int8) {
+      return ExecutionResult.Error("Invalid component call: first param must be int8")
+    }
+    return when (first.value) {
+      0.toByte() -> {
+        processComponentInvoke(tags.drop(1).dropLast(1))
+      }
+      1.toByte() -> {
+        processComponentList(tags.drop(1).dropLast(1))
+      }
+      else -> ExecutionResult.Error("Invalid component call: Invalid call id 0x${first.value.toString(16)}")
+    }
+  }
+
+  private fun processComponentList(tags: List<TaggedBinary>): ExecutionResult? {
+    val filter = tags.firstOrNull()?.let {
+      if (it !is TaggedBinary.Bytes) {
+        return ExecutionResult.Error("Invalid component invoke: first param must be bytes (filter)")
+      }
+      String(it.value)
+    } ?: ""
+
+    val res = synchronized(machine.components()) {
+      machine.components()
+        .filter { it.value.contains(filter) }
+        .flatMap {
+          listOf(
+            TaggedBinary.Bytes(it.key.toByteArray()),
+            TaggedBinary.Bytes(it.value.toByteArray())
+          )
+        }
+        .toList()
+    }
+
+    val tb = res + listOf(TaggedBinary.End)
+    val buff = tb.toBytes()
+    componentFifo!!.setReadBuffer(buff)
+
+    return null
+  }
+
+  private fun processComponentInvoke(tags: List<TaggedBinary>): ExecutionResult? {
+    if (tags.size < 2) {
+      return ExecutionResult.Error("Invalid component invoke: requires at least 2 params <uuid>, <function-name>")
+    }
+    val idTag = tags[0]
+    if (idTag !is TaggedBinary.Bytes) {
+      return ExecutionResult.Error("Invalid component invoke: first param must be bytes (UUID)")
+    }
+    val methodTag = tags[1]
+    if (methodTag !is TaggedBinary.Bytes) {
+      return ExecutionResult.Error("Invalid component invoke: second param must be bytes (function name)")
+    }
+    val id = String(idTag.value)
+    val method = String(methodTag.value)
+    val args = tags.drop(2).map { it.value }
+      .toTypedArray()
+
+    val res = invoke(id, method, args)
+    if (res != null) {
+      syncCall = res
+    }
+
+    return null
+  }
+
+  private fun invoke(id: String, method: String, args: Array<Any?>): InvokeResult.Sync? {
+    val invokeResult = withComponent(id) { comp ->
+      val m = machine.methods(comp.host())[method]
+      if (m == null) {
+        InvokeResult.Error("Unknown method $method")
+      } else {
+        if (m.direct) {
+          try {
+            val res = machine.invoke(id, method, args)
+            InvokeResult.Success(res)
+          } catch (e: LimitReachedException) {
+            InvokeResult.Sync(id, method, args)
+          }
+        } else {
+          InvokeResult.Sync(id, method, args)
+        }
+      }
+    } ?: InvokeResult.Error("Unknown component $id")
+
+    when (invokeResult) {
+      is InvokeResult.Success -> {
+        val tb = invokeResult.results.toTaggedBinary()
+        val res = listOf(TaggedBinary.Int8(0)) + tb + listOf(TaggedBinary.End)
+        val buff = res.toBytes()
+        componentFifo!!.setReadBuffer(buff)
+      }
+      is InvokeResult.Error -> {
+        val res = listOf(
+          TaggedBinary.Int8(1),
+          TaggedBinary.Bytes(invokeResult.message.toByteArray()),
+          TaggedBinary.End
+        )
+        val buff = res.toBytes()
+        componentFifo!!.setReadBuffer(buff)
+      }
+      is InvokeResult.Sync -> return invokeResult
+    }
+    return null
+  }
+
+  private fun <T> withComponent(address: String, f: (Component) -> T): T? = connected {
     val component = machine.node().network().node(address) as? Component
 
     if (component != null && (component.canBeReachedFrom(machine.node()) || component == machine.node())) {
       f(component)
     } else {
       // TODO: is this ok? or does this need to be nullable?
-      throw IllegalStateException("Couldn't find component")
+      null
     }
   }
 
