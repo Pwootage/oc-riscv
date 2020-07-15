@@ -1,19 +1,19 @@
 package com.pwootage.oc.js
 
 import com.pwootage.oc.riscv.OCRISCV
+import com.pwootage.oc.riscv.taggedFormat.TaggedBinary
+import com.pwootage.oc.riscv.taggedFormat.readTagged
 import com.pwootage.riscwm.RiscWM
-import com.pwootage.riscwm.memory.devices.FIFOPrintDevice
-import com.pwootage.riscwm.memory.devices.RAMMemoryDevice
-import com.pwootage.riscwm.memory.devices.ROMMemoryDevice
+import com.pwootage.riscwm.memory.devices.*
 import li.cil.oc.api.Driver
 import li.cil.oc.api.driver.item.Memory
 import li.cil.oc.api.machine.Architecture
 import li.cil.oc.api.machine.ExecutionResult
-import li.cil.oc.api.machine.LimitReachedException
 import li.cil.oc.api.machine.Machine
 import li.cil.oc.api.network.Component
 import net.minecraft.item.ItemStack
 import net.minecraft.nbt.NBTTagCompound
+import java.io.ByteArrayInputStream
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.CompletableFuture
@@ -26,6 +26,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
   private var _initialized = false
   private var connectedPromise = CompletableFuture<Boolean>()
   private var vm: RiscWM? = null
+  private var componentFifo: BasicFIFO? = null
 
   override fun isInitialized(): Boolean = _initialized
 
@@ -51,8 +52,11 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
 
   private fun createVM(): RiscWM {
     return RiscWM().apply {
+      // TODO: based on RAM size
+      val ram = RAMMemoryDevice(0x8000_0000u, 10000u)
+      mmu.physicalMemorySpace.addDevice(ram)
       mmu.physicalMemorySpace.addDevice(
-        RAMMemoryDevice(0x8000_0000u, 0u)
+        RAMSizeDevice(ram)
       )
       mmu.physicalMemorySpace.addDevice(
         FIFOPrintDevice(0x1000_0000u)
@@ -60,9 +64,17 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
       // TODO: replace w/ real deal
       val data = Files.readAllBytes(Paths.get("eeprom.bin"))
       mmu.physicalMemorySpace.addDevice(
-        ROMMemoryDevice(0x1100_0000u, data)
+        ROMMemoryDevice(0x2000_0000u, data)
       )
-      cpu.pc = 0x1100_0000u
+      mmu.physicalMemorySpace.addDevice(
+        ROMMemoryDevice(0x2001_0000u, ByteArray(256))
+      )
+      componentFifo = BasicFIFO(
+        0x1000_1000u
+      )
+      mmu.physicalMemorySpace.addDevice(componentFifo!!)
+
+      cpu.pc = 0x2000_0000u
     }
   }
 
@@ -111,9 +123,16 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
     // TODO: better limit than just 1m
     vm!!.interpret(1024 * 1024)
 
-
-
-
+    val buffer = componentFifo?.writeBufferIfReady()
+    if (buffer != null) {
+      val bois = ByteArrayInputStream(buffer)
+      val tags = mutableListOf<TaggedBinary>()
+      while (bois.available() > 0) {
+        val data = bois.readTagged()
+        tags.add(data)
+      }
+//      processComponent
+    }
 
     return ExecutionResult.Error("Not yet implemented ;)")
   }

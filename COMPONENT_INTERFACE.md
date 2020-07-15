@@ -2,10 +2,18 @@
 
 |start|length|name|
 |-----|------|----|
-|0x1000_1000|0x1|Component FIFO|
+|0x1000_1000|0x2|Component FIFO|
 |0x2000_0000|4096 (configurable)|EEPROM|
 |0x2001_0000|256(configurable)|EEPROM data|
-|0x8000_0000|<memory_size>|Main RAM
+|0x7FFF_0000|4|Main RAM size in bytes|
+|0x8000_0000|<memory_size>|Main RAM|
+
+# Component FIFO
+|start|length|name|
+|-----|------|----|
+|0x0|0x1|FIFO read/write|
+|0x1|0x1|FIFO read ready|
+|0x2|0x1|FIFO write ready|
 
 # Binary component interface
 

@@ -37,18 +37,14 @@ class ROMMemoryDevice(
     }
 
     override fun write8(offset: UInt, value: Byte) {
-        rom.put((offset - start).toInt(), value)
     }
 
     override fun write16(offset: UInt, value: Short) {
-        rom.putShort((offset - start).toInt(), value)
     }
 
     override fun write32(offset: UInt, value: Int) {
-        rom.putInt((offset - start).toInt(), value)
     }
 
     override fun write64(offset: UInt, value: Long) {
-        rom.putLong((offset - start).toInt(), value)
     }
 }
