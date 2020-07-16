@@ -2,7 +2,8 @@
 
 |start|length|name|
 |-----|------|----|
-|0x1000_1000|0x2|Component FIFO|
+|0x1000_1000|0x3|Component FIFO|
+|0x1000_2000|0x3|Panic FIFO (write to PANIC)|
 |0x2000_0000|4096 (configurable)|EEPROM|
 |0x2001_0000|256(configurable)|EEPROM data|
 |0x7FFF_0000|4|Main RAM size in bytes|

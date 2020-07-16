@@ -47,6 +47,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
   private var connectedPromise = CompletableFuture<Boolean>()
   private var vm: RiscWM? = null
   private var componentFifo: BasicFIFO? = null
+  private var panicFifo: BasicFIFO? = null
   private var syncCall: InvokeResult.Sync? = null
 
   override fun isInitialized(): Boolean = _initialized
@@ -90,10 +91,10 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
       mmu.physicalMemorySpace.addDevice(
         ROMMemoryDevice(0x2001_0000u, ByteArray(256))
       )
-      componentFifo = BasicFIFO(
-        0x1000_1000u
-      )
+      componentFifo = BasicFIFO(0x1000_1000u)
       mmu.physicalMemorySpace.addDevice(componentFifo!!)
+      panicFifo = BasicFIFO(0x1000_2000u)
+      mmu.physicalMemorySpace.addDevice(panicFifo!!)
 
       cpu.pc = 0x2000_0000u
     }
@@ -141,20 +142,28 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
       machine.popSignal()
     }
 
-    // TODO: better limit than just 1m
-    vm!!.interpret(1024 * 1024)
-
-    val buffer = componentFifo?.writeBufferIfReady()
-    if (buffer != null) {
-      val bois = ByteArrayInputStream(buffer)
-      val tags = mutableListOf<TaggedBinary>()
-      while (bois.available() > 0) {
-        val data = bois.readTagged()
-        tags.add(data)
+    while (true) {
+      // TODO: better limit than just 1m
+      vm!!.interpret(1024 * 1024 * 16)
+      val panicBuffer = panicFifo!!.writeBufferIfReady()
+      if (panicBuffer != null) {
+        return ExecutionResult.Error(String(panicBuffer))
       }
-      val callRes = processComponentCall(tags)
-      if (callRes != null) {
-        return callRes
+
+      val buffer = componentFifo?.writeBufferIfReady()
+      if (buffer != null) {
+        val bois = ByteArrayInputStream(buffer)
+        val tags = mutableListOf<TaggedBinary>()
+        while (bois.available() > 0) {
+          val data = bois.readTagged()
+          tags.add(data)
+        }
+        val callRes = processComponentCall(tags)
+        if (callRes != null) {
+          return callRes
+        }
+      } else {
+        break
       }
     }
 
@@ -241,6 +250,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
     val res = invoke(id, method, args)
     if (res != null) {
       syncCall = res
+      return ExecutionResult.SynchronizedCall()
     }
 
     return null
