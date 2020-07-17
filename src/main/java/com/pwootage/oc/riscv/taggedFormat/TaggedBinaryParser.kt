@@ -3,15 +3,13 @@ package com.pwootage.oc.riscv.taggedFormat
 import com.pwootage.oc.riscv.value.ValueManager
 import li.cil.oc.api.machine.Value
 import java.io.ByteArrayOutputStream
-import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.lang.IllegalArgumentException
 import java.util.*
-import javax.swing.text.html.HTML
 
 sealed class TaggedBinary(val id: Byte) {
-  object Empty: TaggedBinary(0x00)
+  object Null: TaggedBinary(0x00)
   data class Int8(val value: Byte): TaggedBinary(0x01)
   data class Int16(val value: Short): TaggedBinary(0x02)
   data class Int32(val value: Int): TaggedBinary(0x03)
@@ -38,6 +36,8 @@ fun Array<Any?>.toTaggedBinary(valueManager: ValueManager): List<TaggedBinary> {
       is Int -> TaggedBinary.Int32(v)
       is Long -> TaggedBinary.Int64(v)
       is Value -> TaggedBinary.Value(valueManager.add(v))
+      is ByteArray -> TaggedBinary.Bytes(v)
+      null -> TaggedBinary.Null
       // TODO: list; map
       else -> throw IllegalArgumentException("Unable to convert value!!!")
     }
@@ -48,7 +48,7 @@ fun Array<Any?>.toTaggedBinary(valueManager: ValueManager): List<TaggedBinary> {
 
 fun TaggedBinary.toJava(valueManger: ValueManager): Any? {
   return when (this) {
-    TaggedBinary.Empty -> null
+    TaggedBinary.Null -> null
     is TaggedBinary.Int8 -> value
     is TaggedBinary.Int16 -> value
     is TaggedBinary.Int32 -> value
@@ -63,7 +63,7 @@ fun TaggedBinary.toJava(valueManger: ValueManager): Any? {
 fun OutputStream.writeTaggedBinary(b: TaggedBinary) {
   write(b.id.toInt())
   when (b) {
-    TaggedBinary.Empty -> {
+    TaggedBinary.Null -> {
     }
     is TaggedBinary.Int8 -> write(b.value.toInt())
     is TaggedBinary.Int16 -> {
@@ -128,7 +128,7 @@ fun OutputStream.writeTaggedBinary(b: TaggedBinary) {
 fun InputStream.readTagged(): TaggedBinary {
   val type = read()
   return when (type) {
-    0x00 -> TaggedBinary.Empty
+    0x00 -> TaggedBinary.Null
     0x01 -> {
       val value = read()
       TaggedBinary.Int8(value.toByte())

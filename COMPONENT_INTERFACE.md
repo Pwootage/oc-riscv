@@ -22,7 +22,7 @@ It's a simple tagged binary format, in little endian:
 
 Types:
 
-* EMPTY `0x00`
+* null `0x00`
 * int8 `0x01 0x12`
 * int16 `0x02 0x1234`
 * int32 `0x03 0x12345678`
