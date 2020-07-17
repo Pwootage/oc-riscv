@@ -156,7 +156,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
       val panicBuffer = panicFifo!!.writeBufferIfReady()
       if (panicBuffer != null) {
         val panicStr = String(panicBuffer)
-        OCRISCV.log.error("PANIC: $panicStr")
+        println("PANIC: $panicStr")
         return ExecutionResult.Error(panicStr)
       }
 
@@ -203,14 +203,43 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
       return ExecutionResult.Error("Invalid component call: first param must be int8")
     }
     return when (first.value) {
-      0.toByte() -> {
+      0x00.toByte() -> {
         processComponentInvoke(tags.drop(1).dropLast(1))
       }
-      1.toByte() -> {
+      0x01.toByte() -> {
         processComponentList(tags.drop(1).dropLast(1))
+      }
+      0x02.toByte() -> {
+        processComponentDisposeValue(tags.drop(1).dropLast(1))
       }
       else -> ExecutionResult.Error("Invalid component call: Invalid call id 0x${first.value.toString(16)}")
     }
+  }
+
+  private fun processComponentInvoke(tags: List<TaggedBinary>): ExecutionResult? {
+    if (tags.size < 2) {
+      return ExecutionResult.Error("Invalid component invoke: requires at least 2 params <uuid>, <function-name>")
+    }
+    val idTag = tags[0]
+    if (idTag !is TaggedBinary.Bytes) {
+      return ExecutionResult.Error("Invalid component invoke: first param must be bytes (UUID)")
+    }
+    val methodTag = tags[1]
+    if (methodTag !is TaggedBinary.Bytes) {
+      return ExecutionResult.Error("Invalid component invoke: second param must be bytes (function name)")
+    }
+    val id = String(idTag.value)
+    val method = String(methodTag.value)
+    val args = tags.drop(2).map { it.toJava(valueManger) }
+      .toTypedArray()
+
+    val res = invoke(id, method, args)
+    if (res != null) {
+      syncCall = res
+      return ExecutionResult.SynchronizedCall()
+    }
+
+    return null
   }
 
   private fun processComponentList(tags: List<TaggedBinary>): ExecutionResult? {
@@ -240,28 +269,23 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
     return null
   }
 
-  private fun processComponentInvoke(tags: List<TaggedBinary>): ExecutionResult? {
-    if (tags.size < 2) {
-      return ExecutionResult.Error("Invalid component invoke: requires at least 2 params <uuid>, <function-name>")
+  private fun processComponentDisposeValue(tags: List<TaggedBinary>): ExecutionResult? {
+    if (tags.size != 1) {
+      return ExecutionResult.Error("Invalid component invoke: requires one parameter (value to dispose)")
     }
-    val idTag = tags[0]
-    if (idTag !is TaggedBinary.Bytes) {
-      return ExecutionResult.Error("Invalid component invoke: first param must be bytes (UUID)")
+    val id = tags.first().let {
+      if (it !is TaggedBinary.Value) {
+        return ExecutionResult.Error("Invalid component invoke: first param must be the value to dispose")
+      }
+      it.value
     }
-    val methodTag = tags[1]
-    if (methodTag !is TaggedBinary.Bytes) {
-      return ExecutionResult.Error("Invalid component invoke: second param must be bytes (function name)")
-    }
-    val id = String(idTag.value)
-    val method = String(methodTag.value)
-    val args = tags.drop(2).map { it.toJava(valueManger) }
-      .toTypedArray()
 
-    val res = invoke(id, method, args)
-    if (res != null) {
-      syncCall = res
-      return ExecutionResult.SynchronizedCall()
-    }
+    valueManger.destroy(id)
+
+    // Success, end
+    val tb = listOf(TaggedBinary.Int8(0), TaggedBinary.End)
+    val buff = tb.toBytes()
+    componentFifo!!.setReadBuffer(buff)
 
     return null
   }

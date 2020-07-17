@@ -186,6 +186,13 @@ fun InputStream.readTagged(): TaggedBinary {
       read(value)
       TaggedBinary.Bytes(value)
     }
+    0x08 -> {
+      val value = read() or
+        (read() shl 8) or
+        (read() shl 16) or
+        (read() shl 24)
+      TaggedBinary.Value(value)
+    }
     else -> TaggedBinary.End
   }
 }
