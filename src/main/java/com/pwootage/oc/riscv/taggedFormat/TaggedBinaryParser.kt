@@ -1,5 +1,7 @@
 package com.pwootage.oc.riscv.taggedFormat
 
+import com.pwootage.oc.riscv.value.ValueManager
+import li.cil.oc.api.machine.Value
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.InputStream
@@ -9,14 +11,14 @@ import java.util.*
 import javax.swing.text.html.HTML
 
 sealed class TaggedBinary(val id: Byte) {
-  open val value: Any? = null
   object Empty: TaggedBinary(0x00)
-  data class Int8(override val value: Byte): TaggedBinary(0x01)
-  data class Int16(override val value: Short): TaggedBinary(0x02)
-  data class Int32(override val value: Int): TaggedBinary(0x03)
-  data class Int64(override val value: Long): TaggedBinary(0x04)
-  data class Int128(override val value: UUID): TaggedBinary(0x05)
-  data class Bytes(override val value: ByteArray): TaggedBinary(0x06)
+  data class Int8(val value: Byte): TaggedBinary(0x01)
+  data class Int16(val value: Short): TaggedBinary(0x02)
+  data class Int32(val value: Int): TaggedBinary(0x03)
+  data class Int64(val value: Long): TaggedBinary(0x04)
+  data class Int128(val value: UUID): TaggedBinary(0x05)
+  data class Bytes(val value: ByteArray): TaggedBinary(0x06)
+  data class Value(val value: Int): TaggedBinary(0x08)
   object End: TaggedBinary(0xFF.toByte())
 }
 
@@ -26,7 +28,7 @@ fun List<TaggedBinary>.toBytes(): ByteArray {
   return baos.toByteArray()
 }
 
-fun Array<Any?>.toTaggedBinary(): List<TaggedBinary> {
+fun Array<Any?>.toTaggedBinary(valueManager: ValueManager): List<TaggedBinary> {
   val res = mutableListOf<TaggedBinary>()
   for (v in this) {
     val tb = when (v) {
@@ -35,12 +37,27 @@ fun Array<Any?>.toTaggedBinary(): List<TaggedBinary> {
       is Short -> TaggedBinary.Int16(v)
       is Int -> TaggedBinary.Int32(v)
       is Long -> TaggedBinary.Int64(v)
+      is Value -> TaggedBinary.Value(valueManager.add(v))
+      // TODO: list; map
       else -> throw IllegalArgumentException("Unable to convert value!!!")
     }
     res.add(tb)
   }
-  res.add(TaggedBinary.End)
   return res
+}
+
+fun TaggedBinary.toJava(valueManger: ValueManager): Any? {
+  return when (this) {
+    TaggedBinary.Empty -> null
+    is TaggedBinary.Int8 -> value
+    is TaggedBinary.Int16 -> value
+    is TaggedBinary.Int32 -> value
+    is TaggedBinary.Int64 -> value
+    is TaggedBinary.Int128 -> value
+    is TaggedBinary.Bytes -> value
+    is TaggedBinary.Value -> valueManger.get(value)
+    TaggedBinary.End -> null
+  }
 }
 
 fun OutputStream.writeTaggedBinary(b: TaggedBinary) {
@@ -96,6 +113,12 @@ fun OutputStream.writeTaggedBinary(b: TaggedBinary) {
       write((b.value.size shr 16) and 0xFF)
       write((b.value.size shr 24) and 0xFF)
       write(b.value)
+    }
+    is TaggedBinary.Value -> {
+      write(((b.value) and 0xFF))
+      write((b.value shr 8) and 0xFF)
+      write((b.value shr 16) and 0xFF)
+      write((b.value shr 24) and 0xFF)
     }
     TaggedBinary.End -> {
     }

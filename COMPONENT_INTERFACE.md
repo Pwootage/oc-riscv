@@ -30,6 +30,7 @@ Types:
 * int128 `0x05 0x123456789ABCDEF123456789ABCDEF`
 * bytes `0x06 <length_int32> (<data>)[length]` `0x6 0x00000002 0x01 0x02`
 * object `0x7 [string(name) <type> <value>] string '' END`
+* value `0x8 0x12345678` (OpenComputers Value - these must be disposed)
 * END `0xFF`
 
 Strings are just `bytes` objects
@@ -55,6 +56,14 @@ Strings are just `bytes` objects
 * `end`
 ### OUTPUT
 * `(string(type) int128(uuid))*`
+* `end`
+
+## DISPOSE_VALUE `0x02`
+### INPUT
+* `value`
+* `end`
+### OUTPUT
+* `int8(isError)` 0=success 1=error (can usually be ignored) 
 * `end`
 
 # Example invoke call

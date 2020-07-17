@@ -1,10 +1,8 @@
 package com.pwootage.oc.js
 
 import com.pwootage.oc.riscv.OCRISCV
-import com.pwootage.oc.riscv.taggedFormat.TaggedBinary
-import com.pwootage.oc.riscv.taggedFormat.readTagged
-import com.pwootage.oc.riscv.taggedFormat.toBytes
-import com.pwootage.oc.riscv.taggedFormat.toTaggedBinary
+import com.pwootage.oc.riscv.taggedFormat.*
+import com.pwootage.oc.riscv.value.ValueManager
 import com.pwootage.riscwm.RiscWM
 import com.pwootage.riscwm.memory.devices.*
 import li.cil.oc.api.Driver
@@ -17,6 +15,7 @@ import li.cil.oc.api.network.Component
 import net.minecraft.item.ItemStack
 import net.minecraft.nbt.NBTTagCompound
 import java.io.ByteArrayInputStream
+import java.lang.Exception
 import java.lang.IllegalStateException
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -49,6 +48,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
   private var componentFifo: BasicFIFO? = null
   private var panicFifo: BasicFIFO? = null
   private var syncCall: InvokeResult.Sync? = null
+  private var valueManger = ValueManager(machine)
 
   override fun isInitialized(): Boolean = _initialized
 
@@ -63,7 +63,10 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
   override fun initialize(): Boolean {
     try {
       if (_initialized) return _initialized
+
+      valueManger.clear()
       vm = createVM()
+
       _initialized = true
     } catch (e: Throwable) {
       OCRISCV.log.error("Error in initialize", e)
@@ -120,16 +123,21 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
   override fun close() {
     vm = null
     _initialized = false
+    valueManger.clear()
   }
 
   override fun save(nbt: NBTTagCompound) {
     // TODO: save state
+    valueManger.save(nbt)
   }
 
   override fun load(nbt: NBTTagCompound) {
     // TODO: load state
     if (machine.isRunning) {
       machine.stop()
+
+      valueManger.load(nbt)
+
       machine.start()
     }
   }
@@ -144,10 +152,12 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
 
     while (true) {
       // TODO: better limit than just 1m
-      vm!!.interpret(1024 * 1024 * 16)
+      vm!!.interpret(1024 * 1024)
       val panicBuffer = panicFifo!!.writeBufferIfReady()
       if (panicBuffer != null) {
-        return ExecutionResult.Error(String(panicBuffer))
+        val panicStr = String(panicBuffer)
+        OCRISCV.log.error("PANIC: $panicStr")
+        return ExecutionResult.Error(panicStr)
       }
 
       val buffer = componentFifo?.writeBufferIfReady()
@@ -216,8 +226,8 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
         .filter { it.value.contains(filter) }
         .flatMap {
           listOf(
-            TaggedBinary.Bytes(it.key.toByteArray()),
-            TaggedBinary.Bytes(it.value.toByteArray())
+            TaggedBinary.Bytes(it.value.toByteArray()),
+            TaggedBinary.Bytes(it.key.toByteArray())
           )
         }
         .toList()
@@ -244,7 +254,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
     }
     val id = String(idTag.value)
     val method = String(methodTag.value)
-    val args = tags.drop(2).map { it.value }
+    val args = tags.drop(2).map { it.toJava(valueManger) }
       .toTypedArray()
 
     val res = invoke(id, method, args)
@@ -268,6 +278,8 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
             InvokeResult.Success(res)
           } catch (e: LimitReachedException) {
             InvokeResult.Sync(id, method, args)
+          } catch (e: Exception) {
+            InvokeResult.Error("Error invoking $method: ${e::class.java.name} ${e.message}")
           }
         } else {
           InvokeResult.Sync(id, method, args)
@@ -277,8 +289,11 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
 
     when (invokeResult) {
       is InvokeResult.Success -> {
-        val tb = invokeResult.results.toTaggedBinary()
-        val res = listOf(TaggedBinary.Int8(0)) + tb + listOf(TaggedBinary.End)
+        val tb = invokeResult.results.toTaggedBinary(valueManger)
+        val res =
+          listOf(TaggedBinary.Int8(0)) +
+          tb +
+          listOf(TaggedBinary.End)
         val buff = res.toBytes()
         componentFifo!!.setReadBuffer(buff)
       }
