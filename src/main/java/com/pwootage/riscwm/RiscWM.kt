@@ -11,19 +11,6 @@ class RiscWM {
   var executedCycles: Long = 0
 
   fun interpret(cycles: Int) {
-    repeat(cycles / 16) {
-      repeat(16) {
-        try {
-          cpu.cycle()
-        } catch (e: Exception) {
-          throw Exception("error @ ${cpu.pc.toString(16)}", e)
-        }
-        if (cpu.user_halt) {
-          cpu.user_halt = false
-          return
-        }
-      }
-      executedCycles += 16
-    }
+    cpu.interpret(cycles)
   }
 }

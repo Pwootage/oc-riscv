@@ -1,6 +1,7 @@
 package com.pwootage.riscwm.CPU.instr
 
 import com.pwootage.riscwm.CPU.CPU
+import com.pwootage.riscwm.CPU.CPU_EBREAK
 import com.pwootage.riscwm.CPU.RiscVInstruction
 import java.lang.Float.min
 import java.lang.IllegalStateException
@@ -419,7 +420,7 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
             0b1 -> {
               when {
                 c_rs1 == 0 && c_rs2 == 0 -> { // C.EBREAK
-                  cpu.user_halt = true
+                  throw CPU_EBREAK()
                 }
                 c_rs1 != 0 && c_rs2 == 0 -> { // C.JALR
                   val oldPC = cpu.pc
@@ -489,7 +490,7 @@ inline fun RiscVInstruction.op(cpu: CPU) {
   if (rd == 0) {
     if (funct3 == OPCODES.OP_FUNCT3.SLT) {
       if (rs1 == 1) {
-        cpu.user_halt = true
+        throw CPU_EBREAK()
       }
     }
     return // nop
@@ -638,7 +639,7 @@ fun RiscVInstruction.system(cpu: CPU) {
           // TODO: implement this
         }
         OPCODES.SYSTEM_FUNCT12.EBREAK -> {
-          cpu.user_halt = true
+          throw CPU_EBREAK()
         }
         else -> throw IllegalStateException("Invalid system funct12") // TODO: CPU exception
       }
