@@ -1,4 +1,3 @@
-import com.pwootage.riscwm.CPU.RiscVInstruction
 import com.pwootage.riscwm.RiscWM
 import com.pwootage.riscwm.memory.devices.FIFOPrintDevice
 import com.pwootage.riscwm.memory.devices.RAMMemoryDevice
@@ -20,7 +19,7 @@ fun main() {
         RAMMemoryDevice(0x8000_0000u, 8u * 1024u * 1024u) //8mb
     )
 
-    vm.cpu.pc = 0x1100_0000u
+    vm.harts.forEach { it.pc = 0x1100_0000u }
     val time = measureNanoTime {
         vm.interpret(64*1024*1024)
     }

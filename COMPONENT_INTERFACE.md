@@ -1,21 +1,31 @@
 # Memory map
 
-|start|length|name|
-|-----|------|----|
-|0x1000_1000|0x3|Component FIFO|
-|0x1000_2000|0x3|Panic FIFO (write to PANIC)|
-|0x2000_0000|4096 (configurable)|EEPROM|
-|0x2001_0000|256(configurable)|EEPROM data|
-|0x7FFF_0000|4|Main RAM size in bytes|
-|0x8000_0000|<memory_size>|Main RAM|
+|  start    |length|name|
+|-----------|------|----|
+|0x0200_0000|0xFFFF|Machine timer registers (mtime, mtimecmp)|
+|0x1000_1000|0x3   |Component FIFO|
+|0x1000_2000|0x3   |Panic FIFO (causes PANIC)|
+|0x2000_0000|4096* |EEPROM|
+|0x2001_0000|256*  |EEPROM data|
+|0x7FFF_0000|4     |Main RAM size in bytes|
+|0x8000_0000|msie  |Main RAM|
+\* = configurable
 
-# Component FIFO
+# Basic FIFO (component, panic)
 |start|length|name|
 |-----|------|----|
 |0x0|0x1|FIFO read/write|
 |0x1|0x1|FIFO read ready|
 |0x2|0x1|FIFO write ready|
 
+# Machine timers
+Based on CLINT from [sifive spec](https://sifive.cdn.prismic.io/sifive%2Fc89f6e5a-cf9e-44c3-a3db-04420702dcc1_sifive+e31+manual+v19.08.pdf)
+
+|start        |length|name|
+|-------------|------|----|
+|0x0+hart*4   |4     |msip (soft interrupt pending)|
+|0x4000+hart*8|8     |mtimecmp (interrupt when time greater than)|
+|0xBFF8       |8     |mtime|
 # Binary component interface
 
 It's a simple tagged binary format, in little endian:

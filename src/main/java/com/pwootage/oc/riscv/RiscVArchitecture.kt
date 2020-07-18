@@ -99,7 +99,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
       panicFifo = BasicFIFO(0x1000_2000u)
       mmu.physicalMemorySpace.addDevice(panicFifo!!)
 
-      cpu.pc = 0x2000_0000u
+      harts.forEach { it.pc = 0x2000_0000u }
     }
   }
 

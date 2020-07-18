@@ -1,6 +1,6 @@
 package com.pwootage.riscwm.CPU.instr
 
-import com.pwootage.riscwm.CPU.CPU
+import com.pwootage.riscwm.CPU.Hart
 import com.pwootage.riscwm.CPU.CPU_EBREAK
 import com.pwootage.riscwm.CPU.RiscVInstruction
 import java.lang.Float.min
@@ -179,43 +179,43 @@ object OPCODES {
 
 val CANONICAL_NAN = Float.NaN
 
-fun RiscVInstruction.exec(cpu: CPU) {
+fun RiscVInstruction.exec(hart: Hart) {
   val c = c_opcpde
   if (c != 0b11) {
-    exec_compressed(cpu, c)
-    if (cpu.update_pc) {
-      cpu.pc += 2u
+    exec_compressed(hart, c)
+    if (hart.update_pc) {
+      hart.pc += 2u
     } else {
-      cpu.update_pc = true
+      hart.update_pc = true
     }
   } else {
     when (opcode) {
-      OPCODES.OP_IMM -> op_imm(cpu)
-      OPCODES.LUI -> lui(cpu)
-      OPCODES.AUIPC -> auipc(cpu)
-      OPCODES.OP -> op(cpu)
-      OPCODES.JAL -> jal(cpu)
-      OPCODES.JALR -> jalr(cpu)
-      OPCODES.B -> b(cpu)
-      OPCODES.LOAD -> load(cpu)
-      OPCODES.STORE -> store(cpu)
-      OPCODES.MISC_MEM -> misc_mem(cpu)
-      OPCODES.SYSTEM -> system(cpu)
-      OPCODES.LOAD_FP -> load_fp(cpu)
-      OPCODES.STORE_FP -> store_fp(cpu)
-      OPCODES.OP_FP -> op_fp(cpu)
+      OPCODES.OP_IMM -> op_imm(hart)
+      OPCODES.LUI -> lui(hart)
+      OPCODES.AUIPC -> auipc(hart)
+      OPCODES.OP -> op(hart)
+      OPCODES.JAL -> jal(hart)
+      OPCODES.JALR -> jalr(hart)
+      OPCODES.B -> b(hart)
+      OPCODES.LOAD -> load(hart)
+      OPCODES.STORE -> store(hart)
+      OPCODES.MISC_MEM -> misc_mem(hart)
+      OPCODES.SYSTEM -> system(hart)
+      OPCODES.LOAD_FP -> load_fp(hart)
+      OPCODES.STORE_FP -> store_fp(hart)
+      OPCODES.OP_FP -> op_fp(hart)
       // TODO: throw interrupt instead
       else -> throw IllegalStateException("Invalid opcode")
     }
-    if (cpu.update_pc) {
-      cpu.pc += 4u
+    if (hart.update_pc) {
+      hart.pc += 4u
     } else {
-      cpu.update_pc = true
+      hart.update_pc = true
     }
   }
 }
 
-fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
+fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
   when (op) {
     0b00 -> {
       when (c_funct3) {
@@ -225,28 +225,28 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
             (bits(7, 10) shl 6) or
             (bits(11, 12) shl 4)
           if (imm == 0) throw IllegalStateException("Invalid C.ADDI4SPN immediate/invalid instruction (all zeros)") // TODO: CPU exception
-          val res = cpu.x[2] + imm
-          cpu.setx(c_rs2_prime, res)
+          val res = hart.x[2] + imm
+          hart.setx(c_rs2_prime, res)
         }
         0b001 -> { // C.FLD
           val imm = (bits(10, 12) shl 3) or (bits(5, 6) shl 6)
-          val addr = cpu.x[c_rs1_prime] + imm
-          cpu.d[c_rs2_prime] = cpu.mmu.read64(addr.toUInt())
+          val addr = hart.x[c_rs1_prime] + imm
+          hart.d[c_rs2_prime] = hart.vm.mmu.read64(addr.toUInt())
         }
         0b010 -> { // C.LW
           val imm = (bits(6) shl 2) or (bits(10, 12) shl 3) or (bits(5) shl 6)
-          val addr = cpu.x[c_rs1_prime] + imm
-          cpu.setx(c_rs2_prime, cpu.mmu.read32(addr.toUInt()))
+          val addr = hart.x[c_rs1_prime] + imm
+          hart.setx(c_rs2_prime, hart.vm.mmu.read32(addr.toUInt()))
         }
         0b101 -> { // C.FSD
           val imm = (bits(10, 12) shl 3) or (bits(5, 6) shl 6)
-          val addr = cpu.x[c_rs1_prime] + imm
-          cpu.mmu.write64(addr.toUInt(), cpu.d[c_rs2_prime])
+          val addr = hart.x[c_rs1_prime] + imm
+          hart.vm.mmu.write64(addr.toUInt(), hart.d[c_rs2_prime])
         }
         0b110 -> { // C.SW
           val imm = (bits(6) shl 2) or (bits(10, 12) shl 3) or (bits(5) shl 6)
-          val addr = cpu.x[c_rs1_prime] + imm
-          cpu.mmu.write32(addr.toUInt(), cpu.x[c_rs2_prime])
+          val addr = hart.x[c_rs1_prime] + imm
+          hart.vm.mmu.write32(addr.toUInt(), hart.x[c_rs2_prime])
         }
         else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
       }
@@ -256,8 +256,8 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
         0b000 -> { // C.ADDI C.NOP
           val imm = bits(2, 6) or
             ((bits(12) shl 31) shr (31 - 5))
-          val src = cpu.x[c_rs1]
-          cpu.setx(c_rs1, src + imm)
+          val src = hart.x[c_rs1]
+          hart.setx(c_rs1, src + imm)
         }
         0b001 -> { // C.JAL
           val offset = (bits(2) shl 5) or
@@ -268,16 +268,16 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
             (bits(9, 10) shl 8) or
             (bits(11) shl 4) or
             ((bits(12) shl 31) shr (31 - 11))
-          val oldPC = cpu.pc
+          val oldPC = hart.pc
           val newPC = oldPC.toInt() + offset
-          cpu.pc = newPC.toUInt()
-          cpu.update_pc = false
-          cpu.setx(1, oldPC.toInt() + 2)
+          hart.pc = newPC.toUInt()
+          hart.update_pc = false
+          hart.setx(1, oldPC.toInt() + 2)
         }
         0b010 -> { // C.LI
           val imm = bits(2, 6) or
             ((bits(12) shl 31) shr (31 - 5))
-          cpu.setx(c_rs1, imm)
+          hart.setx(c_rs1, imm)
         }
         0b011 -> {
           when (val rd = c_rs1) {
@@ -288,13 +288,13 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
                 (bits(6) shl 4) or
                 ((bits(12) shl 31) shr (31 - 9))
               if (imm == 0) throw IllegalStateException("Invalid C.ADDI16SP immediate") // TODO: CPU exception
-              val sp = cpu.x[2] + imm
-              cpu.x[2] = sp
+              val sp = hart.x[2] + imm
+              hart.x[2] = sp
             }
             else -> { //C.LUI
               val imm = (bits(2, 6) shl 12) or ((bits(12) shl 31) shr (31 - 17))
               if (imm == 0) throw IllegalStateException("Invalid C.LUI immediate") // TODO: CPU exception
-              cpu.setx(rd, imm)
+              hart.setx(rd, imm)
             }
           }
         }
@@ -302,38 +302,38 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
           when (bits(10, 11)) {
             0b00 -> { // C.SRLI
               val shamt = bits(2, 6)
-              val v = cpu.x[c_rs1] ushr shamt
-              cpu.setx(c_rs1, v)
+              val v = hart.x[c_rs1] ushr shamt
+              hart.setx(c_rs1, v)
             }
             0b01 -> { //C.SRAI
               val shamt = bits(2, 6)
-              val v = cpu.x[c_rs1] shr shamt
-              cpu.setx(c_rs1, v)
+              val v = hart.x[c_rs1] shr shamt
+              hart.setx(c_rs1, v)
             }
             0b10 -> { //C.ANDI
               val imm = bits(2, 6) or ((bits(12) shl 31) shr (31 - 5))
-              val v = cpu.x[c_rs1] and imm
-              cpu.setx(c_rs1, v)
+              val v = hart.x[c_rs1] and imm
+              hart.setx(c_rs1, v)
             }
             0b11 -> {
               when (bits(12)) {
                 0b0 -> {
                   when(bits(5,6)) {
                     0b00 -> { // C.SUB
-                      val res = cpu.x[c_rs1] - cpu.x[c_rs2]
-                      cpu.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] - hart.x[c_rs2]
+                      hart.setx(c_rs1, res)
                     }
                     0b01 -> { // C.XOR
-                      val res = cpu.x[c_rs1] xor cpu.x[c_rs2]
-                      cpu.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] xor hart.x[c_rs2]
+                      hart.setx(c_rs1, res)
                     }
                     0b10 -> { // C.OR
-                      val res = cpu.x[c_rs1] or cpu.x[c_rs2]
-                      cpu.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] or hart.x[c_rs2]
+                      hart.setx(c_rs1, res)
                     }
                     0b11 -> { // C.AND
-                      val res = cpu.x[c_rs1] and cpu.x[c_rs2]
-                      cpu.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] and hart.x[c_rs2]
+                      hart.setx(c_rs1, res)
                     }
                   }
                 }
@@ -353,32 +353,32 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
             (bits(9, 10) shl 8) or
             (bits(11) shl 4) or
             ((bits(12) shl 31) shr (31 - 11))
-          val newPC = cpu.pc.toInt() + offset
-          cpu.pc = newPC.toUInt()
-          cpu.update_pc = false
+          val newPC = hart.pc.toInt() + offset
+          hart.pc = newPC.toUInt()
+          hart.update_pc = false
         }
         0b110 -> { // C.BEQZ
-          if (cpu.x[c_rs1_prime] == 0) {
+          if (hart.x[c_rs1_prime] == 0) {
             val offset = (bits(2) shl 5) or
               (bits(3, 4) shl 1) or
               (bits(5, 6) shl 6) or
               (bits(10, 11) shl 3) or
               ((bits(12) shl 31) shr (31 - 8))
-            val newPC = cpu.pc.toInt() + offset
-            cpu.pc = newPC.toUInt()
-            cpu.update_pc = false
+            val newPC = hart.pc.toInt() + offset
+            hart.pc = newPC.toUInt()
+            hart.update_pc = false
           }
         }
         0b111 -> { // C.BNEZ
-          if (cpu.x[c_rs1_prime] != 0) {
+          if (hart.x[c_rs1_prime] != 0) {
             val offset = (bits(2) shl 5) or
               (bits(3, 4) shl 1) or
               (bits(5, 6) shl 6) or
               (bits(10, 11) shl 3) or
               ((bits(12) shl 31) shr (31 - 8))
-            val newPC = cpu.pc.toInt() + offset
-            cpu.pc = newPC.toUInt()
-            cpu.update_pc = false
+            val newPC = hart.pc.toInt() + offset
+            hart.pc = newPC.toUInt()
+            hart.update_pc = false
           }
         }
         else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
@@ -388,49 +388,50 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
       when (c_funct3) {
         0b000 -> { //C.SLLI
           val shamt = bits(2, 6)
-          val v = cpu.x[c_rs1] shl shamt
-          cpu.setx(c_rs1, v)
+          val v = hart.x[c_rs1] shl shamt
+          hart.setx(c_rs1, v)
         }
         0b001 -> { //C.FLDSP
           val imm = (bits(2, 4) shl 6) or (bits(12) shl 5) or (bits(5, 6) shl 3)
-          val addr = imm + cpu.x[2]
-          cpu.d[c_rs1] = cpu.mmu.read64(addr.toUInt())
+          val addr = imm + hart.x[2]
+          hart.d[c_rs1] = hart.vm.mmu.read64(addr.toUInt())
         }
         0b010 -> { //C.LWSP
           if (c_rs1 == 0) {
             throw IllegalStateException("Illegal c.lwsp target") // TODO: CPU exception
           }
           val imm = (bits(2, 3) shl 6) or (bits(12) shl 5) or (bits(4, 6) shl 2)
-          val addr = imm + cpu.x[2]
-          cpu.setx(c_rs1, cpu.mmu.read32(addr.toUInt()))
+          val addr = imm + hart.x[2]
+          hart.setx(c_rs1, hart.vm.mmu.read32(addr.toUInt()))
         }
         0b100 -> {
           when (bits(12)) {
             0b0 -> {
               when {
                 c_rs1 != 0 && c_rs2 == 0 -> {  // C.JR
-                  cpu.pc = cpu.x[c_rs1].toUInt()
-                  cpu.update_pc = false
+                  hart.pc = hart.x[c_rs1].toUInt()
+                  hart.update_pc = false
                 }
                 c_rs1 != 0 && c_rs2 != 0 -> {  // C.MV
-                  cpu.setx(c_rs1, cpu.x[c_rs2])
+                  hart.setx(c_rs1, hart.x[c_rs2])
                 }
               }
             }
             0b1 -> {
               when {
                 c_rs1 == 0 && c_rs2 == 0 -> { // C.EBREAK
+                  hart.pc += 2u // Exception prevents PC increment
                   throw CPU_EBREAK()
                 }
                 c_rs1 != 0 && c_rs2 == 0 -> { // C.JALR
-                  val oldPC = cpu.pc
-                  cpu.pc = cpu.x[c_rs1].toUInt()
-                  cpu.update_pc = false
-                  cpu.x[1] = oldPC.toInt() + 2
+                  val oldPC = hart.pc
+                  hart.pc = hart.x[c_rs1].toUInt()
+                  hart.update_pc = false
+                  hart.x[1] = oldPC.toInt() + 2
                 }
                 c_rs1 != 0 && c_rs2 != 0 -> { // C.ADD
-                  val res = cpu.x[c_rs1] + cpu.x[c_rs2]
-                  cpu.setx(c_rs1, res)
+                  val res = hart.x[c_rs1] + hart.x[c_rs2]
+                  hart.setx(c_rs1, res)
                 }
               }
             }
@@ -438,13 +439,13 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
         }
         0b101 -> { //C.FSDSP
           val imm = (bits(10, 12) shl 3) or (bits(7, 9) shl 6)
-          val addr = imm + cpu.x[2]
-          cpu.mmu.write64(addr.toUInt(), cpu.d[c_rs2])
+          val addr = imm + hart.x[2]
+          hart.vm.mmu.write64(addr.toUInt(), hart.d[c_rs2])
         }
         0b110 -> { //C.SWSP
           val imm = (bits(9, 12) shl 2) or (bits(7, 8) shl 6)
-          val addr = imm + cpu.x[2]
-          cpu.mmu.write32(addr.toUInt(), cpu.x[c_rs2])
+          val addr = imm + hart.x[2]
+          hart.vm.mmu.write32(addr.toUInt(), hart.x[c_rs2])
         }
         else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
       }
@@ -453,9 +454,9 @@ fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
   }
 }
 
-inline fun RiscVInstruction.op_imm(cpu: CPU) {
+inline fun RiscVInstruction.op_imm(hart: Hart) {
   if (rd == 0) return // nop
-  val src = cpu.x[rs1]
+  val src = hart.x[rs1]
   val imm = immed_i
 
   @Suppress("DUPLICATE_LABEL_IN_WHEN")
@@ -474,29 +475,30 @@ inline fun RiscVInstruction.op_imm(cpu: CPU) {
     }
     else -> throw IllegalStateException("Impossible funct3")
   }
-  cpu.setx(rd, res)
+  hart.setx(rd, res)
 }
 
-inline fun RiscVInstruction.lui(cpu: CPU) {
-  cpu.setx(rd, immed_u)
+inline fun RiscVInstruction.lui(hart: Hart) {
+  hart.setx(rd, immed_u)
 }
 
-inline fun RiscVInstruction.auipc(cpu: CPU) {
+inline fun RiscVInstruction.auipc(hart: Hart) {
   // PC is still equal to this instruction
-  cpu.setx(rd, immed_u + cpu.pc.toInt())
+  hart.setx(rd, immed_u + hart.pc.toInt())
 }
 
-inline fun RiscVInstruction.op(cpu: CPU) {
+inline fun RiscVInstruction.op(hart: Hart) {
   if (rd == 0) {
     if (funct3 == OPCODES.OP_FUNCT3.SLT) {
       if (rs1 == 1) {
+        hart.pc += 4u // Exception prevents PC increment
         throw CPU_EBREAK()
       }
     }
     return // nop
   }
-  val src1 = cpu.x[rs1]
-  val src2 = cpu.x[rs2]
+  val src1 = hart.x[rs1]
+  val src2 = hart.x[rs2]
   val res: Int = if (funct7 == OPCODES.OP_FUNCT7.MUL) {
     when (funct3) {
       OPCODES.OP_MUL_FUNCT3.MUL -> src1 * src2
@@ -551,30 +553,30 @@ inline fun RiscVInstruction.op(cpu: CPU) {
       else -> throw IllegalStateException("Impossible op funct3")
     }
   }
-  cpu.setx(rd, res)
+  hart.setx(rd, res)
 }
 
-inline fun RiscVInstruction.jal(cpu: CPU) {
+inline fun RiscVInstruction.jal(hart: Hart) {
   // PC is still equal to this instruction
-  val oldPC = cpu.pc
+  val oldPC = hart.pc
   val newPC = oldPC.toInt() + immed_j
-  cpu.pc = newPC.toUInt()
-  cpu.update_pc = false
-  cpu.setx(rd, oldPC.toInt() + 4)
+  hart.pc = newPC.toUInt()
+  hart.update_pc = false
+  hart.setx(rd, oldPC.toInt() + 4)
 }
 
-inline fun RiscVInstruction.jalr(cpu: CPU) {
+inline fun RiscVInstruction.jalr(hart: Hart) {
   // PC is still equal to this instruction
-  val oldPC = cpu.pc
-  val newPC = (cpu.x[rs1] + immed_i) and 0b1.inv()
-  cpu.pc = newPC.toUInt()
-  cpu.update_pc = false
-  cpu.setx(rd, oldPC.toInt() + 4)
+  val oldPC = hart.pc
+  val newPC = (hart.x[rs1] + immed_i) and 0b1.inv()
+  hart.pc = newPC.toUInt()
+  hart.update_pc = false
+  hart.setx(rd, oldPC.toInt() + 4)
 }
 
-inline fun RiscVInstruction.b(cpu: CPU) {
-  val src1 = cpu.x[rs1]
-  val src2 = cpu.x[rs2]
+inline fun RiscVInstruction.b(hart: Hart) {
+  val src1 = hart.x[rs1]
+  val src2 = hart.x[rs2]
   val takeBranch = when (funct3) {
     OPCODES.B_FUNCT3.BEQ -> src1 == src2
     OPCODES.B_FUNCT3.BNE -> src1 != src2
@@ -586,38 +588,38 @@ inline fun RiscVInstruction.b(cpu: CPU) {
   }
   if (takeBranch) {
     // PC is still equal to this instruction
-    val newPC = cpu.pc.toInt() + immed_b
-    cpu.pc = newPC.toUInt()
-    cpu.update_pc = false
+    val newPC = hart.pc.toInt() + immed_b
+    hart.pc = newPC.toUInt()
+    hart.update_pc = false
   }
 }
 
-inline fun RiscVInstruction.load(cpu: CPU) {
+inline fun RiscVInstruction.load(hart: Hart) {
   // Can't optimize x0 out, since it still will read the memory; this means it can have side effects for MMIO
-  val addr = (cpu.x[rs1] + immed_i).toUInt()
+  val addr = (hart.x[rs1] + immed_i).toUInt()
   val v: Int = when (funct3) {
-    OPCODES.LOAD_FUNCT3.LW -> cpu.mmu.read32(addr)
-    OPCODES.LOAD_FUNCT3.LB -> cpu.mmu.read8(addr).toInt()
-    OPCODES.LOAD_FUNCT3.LBU -> cpu.mmu.read8(addr).toInt() and 0xFF
-    OPCODES.LOAD_FUNCT3.LH -> cpu.mmu.read16(addr).toInt()
-    OPCODES.LOAD_FUNCT3.LHU -> cpu.mmu.read16(addr).toInt() and 0xFFFF
+    OPCODES.LOAD_FUNCT3.LW -> hart.vm.mmu.read32(addr)
+    OPCODES.LOAD_FUNCT3.LB -> hart.vm.mmu.read8(addr).toInt()
+    OPCODES.LOAD_FUNCT3.LBU -> hart.vm.mmu.read8(addr).toInt() and 0xFF
+    OPCODES.LOAD_FUNCT3.LH -> hart.vm.mmu.read16(addr).toInt()
+    OPCODES.LOAD_FUNCT3.LHU -> hart.vm.mmu.read16(addr).toInt() and 0xFFFF
     else -> throw IllegalStateException("Invalid load funct3") // TODO: CPU exception
   }
-  cpu.setx(rd, v)
+  hart.setx(rd, v)
 }
 
-inline fun RiscVInstruction.store(cpu: CPU) {
-  val value = cpu.x[rs2]
-  val addr = (cpu.x[rs1] + immed_s).toUInt()
+inline fun RiscVInstruction.store(hart: Hart) {
+  val value = hart.x[rs2]
+  val addr = (hart.x[rs1] + immed_s).toUInt()
   when (funct3) {
-    OPCODES.STORE_FUNCT3.SW -> cpu.mmu.write32(addr, value)
-    OPCODES.STORE_FUNCT3.SB -> cpu.mmu.write8(addr, value.toByte())
-    OPCODES.STORE_FUNCT3.SH -> cpu.mmu.write16(addr, value.toShort())
+    OPCODES.STORE_FUNCT3.SW -> hart.vm.mmu.write32(addr, value)
+    OPCODES.STORE_FUNCT3.SB -> hart.vm.mmu.write8(addr, value.toByte())
+    OPCODES.STORE_FUNCT3.SH -> hart.vm.mmu.write16(addr, value.toShort())
     else -> throw IllegalStateException("Invalid write funct3") // TODO: CPU exception
   }
 }
 
-inline fun RiscVInstruction.misc_mem(cpu: CPU) {
+inline fun RiscVInstruction.misc_mem(hart: Hart) {
   when (funct3) {
     OPCODES.MISC_MEM_FUNCT3.FENCE -> {
       //noop
@@ -630,7 +632,7 @@ inline fun RiscVInstruction.misc_mem(cpu: CPU) {
   }
 }
 
-fun RiscVInstruction.system(cpu: CPU) {
+fun RiscVInstruction.system(hart: Hart) {
   when (funct3) {
     OPCODES.SYSTEM_FUNCT3.EBREAK/*, OPCODES.SYSTEM_FUNCT3.ECALL*/ -> {
       when (immed_i) {
@@ -639,55 +641,56 @@ fun RiscVInstruction.system(cpu: CPU) {
           // TODO: implement this
         }
         OPCODES.SYSTEM_FUNCT12.EBREAK -> {
+          hart.pc += 4u // Exception prevents PC increment
           throw CPU_EBREAK()
         }
         else -> throw IllegalStateException("Invalid system funct12") // TODO: CPU exception
       }
     }
     OPCODES.SYSTEM_FUNCT3.CSRRW -> {
-      val v = cpu.x[rs1]
-      val old = cpu.updateCsr(
+      val v = hart.x[rs1]
+      val old = hart.updateCsr(
         immed_i and 0xFFF,
         read = rd != 0,
         write = { v }
       )
       if (old != null) {
-        cpu.setx(rd, old)
+        hart.setx(rd, old)
       }
     }
     OPCODES.SYSTEM_FUNCT3.CSRRS -> {
-      val v = cpu.x[rs1]
+      val v = hart.x[rs1]
       val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
         { it!! or v }
       }
-      val old = cpu.updateCsr(
+      val old = hart.updateCsr(
         immed_i and 0xFFF,
         read = true,
         write = write
       )
-      cpu.setx(rd, old!!)
+      hart.setx(rd, old!!)
     }
     OPCODES.SYSTEM_FUNCT3.CSRRC -> {
-      val v = cpu.x[rs1].inv()
+      val v = hart.x[rs1].inv()
       val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
         { it!! and v }
       }
-      val old = cpu.updateCsr(
+      val old = hart.updateCsr(
         immed_i and 0xFFF,
         read = true,
         write = write
       )
-      cpu.setx(rd, old!!)
+      hart.setx(rd, old!!)
     }
     OPCODES.SYSTEM_FUNCT3.CSRRWI -> {
       val v = rs1
-      val old = cpu.updateCsr(
+      val old = hart.updateCsr(
         immed_i and 0xFFF,
         read = rd != 0,
         write = { v }
       )
       if (old != null) {
-        cpu.setx(rd, old)
+        hart.setx(rd, old)
       }
     }
     OPCODES.SYSTEM_FUNCT3.CSRRSI -> {
@@ -695,72 +698,72 @@ fun RiscVInstruction.system(cpu: CPU) {
       val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
         { it!! or v }
       }
-      val old = cpu.updateCsr(
+      val old = hart.updateCsr(
         immed_i and 0xFFF,
         read = true,
         write = write
       )
-      cpu.setx(rd, old!!)
+      hart.setx(rd, old!!)
     }
     OPCODES.SYSTEM_FUNCT3.CSRRCI -> {
       val v = rs1.inv()
       val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
         { it!! and v }
       }
-      val old = cpu.updateCsr(
+      val old = hart.updateCsr(
         immed_i and 0xFFF,
         read = true,
         write = write
       )
-      cpu.setx(rd, old!!)
+      hart.setx(rd, old!!)
     }
     else -> throw IllegalStateException("Invalid system funct3") // TODO: CPU exception
   }
 
 }
 
-inline fun RiscVInstruction.load_fp(cpu: CPU) {
-  val addr = (cpu.x[rs1] + immed_i).toUInt()
+inline fun RiscVInstruction.load_fp(hart: Hart) {
+  val addr = (hart.x[rs1] + immed_i).toUInt()
   when (funct3) {
     OPCODES.LOAD_FP_FUNCT3.LOAD_FLOAT -> {
-      val v = cpu.mmu.read32(addr).toLong()
-      cpu.d[rd] = v or 0xFFFF_FFFF_0000_0000UL.toLong()
+      val v = hart.vm.mmu.read32(addr).toLong()
+      hart.d[rd] = v or 0xFFFF_FFFF_0000_0000UL.toLong()
     }
     OPCODES.LOAD_FP_FUNCT3.LOAD_DOUBLE -> {
-      val v = cpu.mmu.read64(addr)
-      cpu.d[rd] = v
+      val v = hart.vm.mmu.read64(addr)
+      hart.d[rd] = v
     }
     else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
   }
 }
 
-inline fun RiscVInstruction.store_fp(cpu: CPU) {
-  val addr = (cpu.x[rs1] + immed_s).toUInt()
+inline fun RiscVInstruction.store_fp(hart: Hart) {
+  val addr = (hart.x[rs1] + immed_s).toUInt()
   when (funct3) {
     OPCODES.STORE_FP_FUNCT3.STORE_FLOAT -> {
-      val v: Int = cpu.d[rs2].toInt()
-      cpu.mmu.write32(addr, v)
+      val v: Int = hart.d[rs2].toInt()
+      hart.vm.mmu.write32(addr, v)
     }
     OPCODES.STORE_FP_FUNCT3.STORE_DOUBLE -> {
-      val v = cpu.d[rs2]
-      cpu.mmu.write64(addr, v)
+      val v = hart.d[rs2]
+      hart.vm.mmu.write64(addr, v)
     }
     else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
   }
 }
 
-inline fun RiscVInstruction.op_fp(cpu: CPU) {
+inline fun RiscVInstruction.op_fp(hart: Hart) {
   if (fmt == OPCODES.OP_FP_FMT.FLOAT) {
-    val src1 = cpu.getf(rs1)
-    val src2 = cpu.getf(rs2)
+    val src1 = hart.getf(rs1)
+    val src2 = hart.getf(rs2)
     when (funct5) {
       // TODO: rounding mode, flags
-      OPCODES.OP_FP_FUNCT5.FADD -> cpu.setf(rd, src2 + src2)
-      OPCODES.OP_FP_FUNCT5.FSUB -> cpu.setf(rd, src1 - src2)
-      OPCODES.OP_FP_FUNCT5.FMUL -> cpu.setf(rd, src1 * src2)
-      OPCODES.OP_FP_FUNCT5.FDIV -> cpu.setf(rd, src1 / src2)
-      OPCODES.OP_FP_FUNCT5.FSQRT -> cpu.setf(rd, sqrt(src1.toDouble()).toFloat())
-      OPCODES.OP_FP_FUNCT5.FMIN_MAX -> cpu.setf(
+      OPCODES.OP_FP_FUNCT5.FADD -> hart.setf(rd, src2 + src2)
+      OPCODES.OP_FP_FUNCT5.FSUB -> hart.setf(rd, src1 - src2)
+      OPCODES.OP_FP_FUNCT5.FMUL -> hart.setf(rd, src1 * src2)
+      OPCODES.OP_FP_FUNCT5.FDIV -> hart.setf(rd, src1 / src2)
+      OPCODES.OP_FP_FUNCT5.FSQRT -> hart.setf(rd, sqrt(src1.toDouble()).toFloat())
+      OPCODES.OP_FP_FUNCT5.FMIN_MAX -> hart.setf(
         rd, when (rm) {
         OPCODES.OP_FP_MIN_MAX_RM.MIN -> min(src1, src2) // This should be correct for nan handling, I think
         OPCODES.OP_FP_MIN_MAX_RM.MAX -> max(src1, src2)
@@ -768,21 +771,21 @@ inline fun RiscVInstruction.op_fp(cpu: CPU) {
       }
       )
       // TODO: flags, possibly missing edge cases
-      OPCODES.OP_FP_FUNCT5.FCVT_W_S -> cpu.setx(
+      OPCODES.OP_FP_FUNCT5.FCVT_W_S -> hart.setx(
         rd, when (rs2) {
         OPCODES.OP_FP_CVT_MODE.W -> src1.toInt()
         OPCODES.OP_FP_CVT_MODE.WU -> src1.toUInt().toInt()
         else -> throw IllegalStateException("Invalid convert mode") // TODO: CPU exception
       }
       )
-      OPCODES.OP_FP_FUNCT5.FCVT_S_W -> cpu.setf(
+      OPCODES.OP_FP_FUNCT5.FCVT_S_W -> hart.setf(
         rd, when (rs2) {
-        OPCODES.OP_FP_CVT_MODE.W -> cpu.x[rs1].toFloat()
-        OPCODES.OP_FP_CVT_MODE.WU -> cpu.x[rs1].toUInt().toFloat()
+        OPCODES.OP_FP_CVT_MODE.W -> hart.x[rs1].toFloat()
+        OPCODES.OP_FP_CVT_MODE.WU -> hart.x[rs1].toUInt().toFloat()
         else -> throw IllegalStateException("Invalid convert mode") // TODO: CPU exception
       }
       )
-      OPCODES.OP_FP_FUNCT5.FSGNJ -> cpu.setf(
+      OPCODES.OP_FP_FUNCT5.FSGNJ -> hart.setf(
         rd, when (funct3) {
         OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJ_S -> src1.withSign(src2)
         OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJN_S -> src1.withSign(-src2)
@@ -790,9 +793,9 @@ inline fun RiscVInstruction.op_fp(cpu: CPU) {
         else -> throw IllegalStateException("Invalid sign injection mode") // TODO: CPU exception
       }
       )
-      OPCODES.OP_FP_FUNCT5.FMV_W_X -> cpu.d[rd] = cpu.x[rs1].toLong() or 0xFFFF_FFFF_0000_0000u.toLong()
-      OPCODES.OP_FP_FUNCT5.FMV_X_W, OPCODES.OP_FP_FUNCT5.FCLASS -> cpu.setx(rd, when (funct3) {
-        OPCODES.OP_FP_FMV_X_W_FUNCT3.FMV_X_V -> cpu.d[rs1].toInt()
+      OPCODES.OP_FP_FUNCT5.FMV_W_X -> hart.d[rd] = hart.x[rs1].toLong() or 0xFFFF_FFFF_0000_0000u.toLong()
+      OPCODES.OP_FP_FUNCT5.FMV_X_W, OPCODES.OP_FP_FUNCT5.FCLASS -> hart.setx(rd, when (funct3) {
+        OPCODES.OP_FP_FMV_X_W_FUNCT3.FMV_X_V -> hart.d[rs1].toInt()
         OPCODES.OP_FP_FMV_X_W_FUNCT3.FCLASS -> {
           var clazz = 0
           if (src1.isInfinite() && src1 < 0) {
@@ -831,7 +834,7 @@ inline fun RiscVInstruction.op_fp(cpu: CPU) {
         }
         else -> throw IllegalStateException("Invalid FMV/FCLASS mode") // TODO: CPU exception
       })
-      OPCODES.OP_FP_FUNCT5.FCMP -> cpu.setx(
+      OPCODES.OP_FP_FUNCT5.FCMP -> hart.setx(
         rd, if (when (funct3) {
           OPCODES.OP_FP_FCMP_FUNCT3.FEQ -> src1 == src2
           OPCODES.OP_FP_FCMP_FUNCT3.FLE -> src1 <= src2

@@ -2,11 +2,13 @@ package com.pwootage.riscwm.CPU
 
 import com.pwootage.riscwm.CPU.instr.CANONICAL_NAN
 import com.pwootage.riscwm.CPU.instr.exec
+import com.pwootage.riscwm.CYCLES_PER_INTERPRET
+import com.pwootage.riscwm.RiscWM
 import com.pwootage.riscwm.memory.MMU
 import java.lang.Exception
 import java.lang.IllegalArgumentException
 
-class CPU(val mmu: MMU) {
+class Hart(val vm: RiscWM) {
   // CPU state (persisting)
   val x: Array<Int> = Array(32) { 0 }
   val d: Array<Long> = Array(32) { 0L }
@@ -15,28 +17,17 @@ class CPU(val mmu: MMU) {
 
   // Timer
   var cycle: Long = 0
+  var mtimecmp: Long = Long.MAX_VALUE
 
   // Status
   // Note: these fields are assumed to have valid values! which is dangerous ;)
   // Zero-cost abstraction stuff could fix this in C++ or rust
-
-  /** Trap SRET */
-  var TSR = 0
-
-  /** Timeout Wait */
-  var TW = 0
-
-  /** Trap virtual memory */
-  var TVM = 0
-
-  /** Make executable readable */
-  var MXR = 0
-
-  /** Permit supervisor user memory access */
-  var SUM = 0
-
-  /** Modify priv mode: if 1, load and store are as if priv mode = MPP */
-  var MPRV = 0
+  var TSR = 0 // Trap SRET
+  var TW = 0 // Timeout Wait
+  var TVM = 0 // Trap virtual memory
+  var MXR = 0 // Make executable readable
+  var SUM = 0 // Permit supervisor user memory access
+  var MPRV = 0 // Modify priv mode: if 1, load and store are as if priv mode = MPP
 
   /** X/F register status, SD = FS/XS are dirty */
   // These are not supported
@@ -50,29 +41,46 @@ class CPU(val mmu: MMU) {
   val FS = 0
   val SD = 0
 
-  /** Machine previous priv */
-  var MPP = 0
+  var MPP = 0 // Machine previous priv
+  var SPP = 0 // Supervisor previous priv
+  var MPIE = 0 // Machine previous interrupt enable
+  var SPIE = 0 // Supervisor previous interrupt enable
+  var UPIE = 0 // User previous interrupt enable
+  var MIE = 0 // Machine Interrupt Enable
+  var SIE = 0 // Supervisor Interrupt Enable
+  var UIE = 0 // User Interrupt Enable
 
-  /* Supervisor previous priv */
-  var SPP = 0
+  /** Machine trap vector base */
+  var MTVEC_BASE = 0 // Vector base (used shl 2)
+  var MTVEC_MODE = 0 // Vector mode (direct, vectored)
 
-  /** Machine previous interrupt enable */
-  var MPIE = 0
+  /** Interrupt delegation registers */
+  var medeleg = 0 // Delegate s exceptions to s?
+  var mideleg = 0 // Delegate s interrupts to s?
+  var sedeleg = 0 // Delegate u interrupts to u?
+  var sideleg = 0 // Delegate u exceptions to u?
 
-  /** Supervisor previous interrupt enable */
-  var SPIE = 0
+  /** Interrupt status bits */
+  var MEIP = 0 // Machine external interrupt pending
+  var SEIP = 0 // Supervisor external interrupt pending
+  var UEIP = 0 // User external interupt pending
+  var MTIP = 0 // Machine timer interrupt pending
+  var STIP = 0 // Supervisor timer interrupt pending
+  var UTIP = 0 // User timer interrupt pending
+  var MSIP = 0 // Machine software interrupt pending
+  var SSIP = 0 // Supervisor software interrupt pending
+  var USIP = 0 // User software interrupt pending
 
-  /** User previous interrupt enable */
-  var UPIE = 0
-
-  /** Machine Interrupt Enable */
-  var MIE = 0
-
-  /** Supervisor Interrupt Enable */
-  var SIE = 0
-
-  /** User Interrupt Enable */
-  var UIE = 0
+  /** Interupt enable bits */
+  var MEIE = 0 // Machine external interrupt enable
+  var SEIE = 0 // Supervisor external interrupt enable
+  var UEIE = 0 // User external interrupt enable
+  var MTIE = 0 // Machine timer interrupt enable
+  var STIE = 0 // Supervisor timer interrupt enable
+  var UTIE = 0 // User timer interrupt enable
+  var MSIE = 0 // Machine software interrupt enable
+  var SSIE = 0 // Supervisor software interrupt enable
+  var USIE = 0 // User software interrupt enable
 
   val priv_mode = PRIV_MODES.machine
 
@@ -82,29 +90,27 @@ class CPU(val mmu: MMU) {
   // Non-persisting state
   var update_pc = true
 
-  fun interpret(cycles: Int) {
-    val cyclesPerLoop = 16
-    repeat(cycles / cyclesPerLoop) {
-      // Optimization: only check certain things every 16 cycles
-      repeat(cyclesPerLoop) { partialCycles ->
-        try {
-          cycle()
-          // Optimization: don't check a boolean for uncommon situations; throw exceptions
-        } catch (e: CPU_EBREAK) {
-          cycle += partialCycles
-          return
-        } catch (e: Exception) {
-          cycle += partialCycles
-          throw Exception("error @ ${pc.toString(16)}", e)
-        }
+  fun interpret(cyclesToInterpret: Int): Boolean {
+    // Optimization: only check certain things every 16 cycles
+    // TODO: check for interrupts
+    repeat(cyclesToInterpret) { partialCycles ->
+      try {
+        cycle()
+        // Optimization: don't check a boolean for uncommon situations; throw exceptions
+      } catch (e: CPU_EBREAK) {
+        cycle += partialCycles
+        return false
+      } catch (e: Exception) {
+        cycle += partialCycles
+        throw Exception("error @ ${pc.toString(16)}", e)
       }
-      // Close enough ;)
-      cycle += cyclesPerLoop
     }
+    cycle += cyclesToInterpret
+    return true
   }
 
   fun cycle() {
-    val instr = RiscVInstruction(mmu.read32(pc))
+    val instr = RiscVInstruction(vm.mmu.read32(pc))
     instr.exec(this)
   }
 
@@ -135,53 +141,13 @@ class CPU(val mmu: MMU) {
     return Double.fromBits(d[rs])
   }
 
-  fun readMachineStatusRaw(): Int {
-    return (SD shl 31) or
-      (TSR shl 22) or
-      (TW shl 21) or
-      (TVM shl 20) or
-      (MXR shl 19) or
-      (SUM shl 18) or
-      (MPRV shl 17) or
-      (XS shl 15) or
-      (FS shl 13) or
-      (MPP shl 11) or
-      (SPP shl 8) or
-      (MPIE shl 7) or
-      (SPIE shl 5) or
-      (UPIE shl 4) or
-      (MIE shl 3) or
-      (SIE shl 1) or
-      (UIE shl 0)
-  }
-
-  fun writeMachineStatusRaw(value: Int) {
-//    SD = (value shr 31) and 0b1
-    TSR = (value shr 22) and 0b1
-    TW = (value shr 21) and 0b1
-    TVM = (value shr 20) and 0b1
-    MXR = (value shr 19) and 0b1
-    SUM = (value shr 18) and 0b1
-    MPRV = (value shr 17) and 0b1
-    //XS = (value shr 15) and 0b11
-    //FS = (value shr 13) and 0b11
-    MPP = (value shr 11) and 0b11
-    SPP = (value shr 8) and 0b1
-    MPIE = (value shr 7) and 0b1
-    SPIE = (value shr 5) and 0b1
-    UPIE = (value shr 4) and 0b1
-    MIE = (value shr 3) and 0b1
-    SIE = (value shr 1) and 0b1
-    UIE = (value shr 0) and 0b1
-  }
-
   fun readCSRRaw(csrNum: Int): Int {
     return when (csrNum) {
       // Timing CSRs
       CSR_ID.cycle, CSR_ID.mcycle, CSR_ID.instret, CSR_ID.minstret -> cycle.toInt()
-      CSR_ID.time -> System.currentTimeMillis().toInt()
+      CSR_ID.time -> vm.readTime().toInt()
       CSR_ID.cycleh, CSR_ID.mcycleh, CSR_ID.instreth, CSR_ID.minstreth -> (cycle shr 32).toInt()
-      CSR_ID.timeh -> (System.currentTimeMillis() shr 32).toInt()
+      CSR_ID.timeh -> (vm.readTime() shr 32).toInt()
       // Machine CSRs
       CSR_ID.misa, CSR_ID.mvendorid, CSR_ID.marchid, CSR_ID.mimpid -> 0
       CSR_ID.mhartid -> hartID
@@ -219,6 +185,47 @@ class CPU(val mmu: MMU) {
       }
     }
     return old
+  }
+
+
+  private fun readMachineStatusRaw(): Int {
+    return (SD shl 31) or
+      (TSR shl 22) or
+      (TW shl 21) or
+      (TVM shl 20) or
+      (MXR shl 19) or
+      (SUM shl 18) or
+      (MPRV shl 17) or
+      (XS shl 15) or
+      (FS shl 13) or
+      (MPP shl 11) or
+      (SPP shl 8) or
+      (MPIE shl 7) or
+      (SPIE shl 5) or
+      (UPIE shl 4) or
+      (MIE shl 3) or
+      (SIE shl 1) or
+      (UIE shl 0)
+  }
+
+  private fun writeMachineStatusRaw(value: Int) {
+//    SD = (value shr 31) and 0b1
+    TSR = (value shr 22) and 0b1
+    TW = (value shr 21) and 0b1
+    TVM = (value shr 20) and 0b1
+    MXR = (value shr 19) and 0b1
+    SUM = (value shr 18) and 0b1
+    MPRV = (value shr 17) and 0b1
+    //XS = (value shr 15) and 0b11
+    //FS = (value shr 13) and 0b11
+    MPP = (value shr 11) and 0b11
+    SPP = (value shr 8) and 0b1
+    MPIE = (value shr 7) and 0b1
+    SPIE = (value shr 5) and 0b1
+    UPIE = (value shr 4) and 0b1
+    MIE = (value shr 3) and 0b1
+    SIE = (value shr 1) and 0b1
+    UIE = (value shr 0) and 0b1
   }
 }
 
@@ -357,4 +364,9 @@ object ROUNDING_MODE {
 
   /** In instruction’s rm field, selects dynamic rounding mode; In Rounding Mode register, Invalid. */
   val DYN = 0b111
+}
+
+object MTVEC_MODES {
+  val direct = 0
+  val vectored = 1
 }
