@@ -9,7 +9,7 @@ const val CYCLES_PER_INTERPRET = 64
 class RiscWM {
   val mmu = MMU()
   val harts = arrayOf(
-    Hart(this)
+    Hart(this, 0)
   )
 
   var time_base: Long = System.currentTimeMillis()

@@ -2,13 +2,12 @@ package com.pwootage.riscwm.CPU
 
 import com.pwootage.riscwm.CPU.instr.CANONICAL_NAN
 import com.pwootage.riscwm.CPU.instr.exec
-import com.pwootage.riscwm.CYCLES_PER_INTERPRET
 import com.pwootage.riscwm.RiscWM
-import com.pwootage.riscwm.memory.MMU
 import java.lang.Exception
 import java.lang.IllegalArgumentException
+import java.lang.IllegalStateException
 
-class Hart(val vm: RiscWM) {
+class Hart(val vm: RiscWM, val hartID: Int) {
   // CPU state (persisting)
   val x: Array<Int> = Array(32) { 0 }
   val d: Array<Long> = Array(32) { 0L }
@@ -50,10 +49,6 @@ class Hart(val vm: RiscWM) {
   var SIE = 0 // Supervisor Interrupt Enable
   var UIE = 0 // User Interrupt Enable
 
-  /** Machine trap vector base */
-  var MTVEC_BASE = 0 // Vector base (used shl 2)
-  var MTVEC_MODE = 0 // Vector mode (direct, vectored)
-
   /** Interrupt delegation registers */
   var medeleg = 0 // Delegate s exceptions to s?
   var mideleg = 0 // Delegate s interrupts to s?
@@ -82,17 +77,42 @@ class Hart(val vm: RiscWM) {
   var SSIE = 0 // Supervisor software interrupt enable
   var USIE = 0 // User software interrupt enable
 
-  val priv_mode = PRIV_MODES.machine
+  /** Interrupt registers */
+  // Machine
+  var mtvec_base = 0 // Machine vector base (right two bits are 0)
+  var mtvec_mode = 0 // Machine vector mode (direct, vectored)
+  var mscratch = 0 // Machine scratch: usually a pointer
+  var mepc = 0 // Machine exception program counter
+  var mcause = 0 // Machine cause register
+  var mtval = 0 // Machine trap value
+  // Supervisor
+  var stvec_base = 0 // Supervisor vector base (right two bits are 0)
+  var stvec_mode = 0 // Supervisor vector mode (direct, vectored)
+  var sscratch = 0 // Supervisor scratch: usually a pointer
+  var sepc = 0 // Supervisor exception program counter
+  var scause = 0 // Supervisor cause register
+  var stval = 0 // Supervisor trap value
+  // User
+  var utvec_base = 0 // User vector base (right two bits are 0)
+  var utvec_mode = 0 // User vector mode (direct, vectored)
+  var uscratch = 0 // User scratch: usually a pointer
+  var uepc = 0 // User exception program counter
+  var ucause = 0 // User cause register
+  var utval = 0 // User trap value
 
-  // Read-only, for now, but persisting
-  val hartID = 0
+  /** Wait for interrupt */
+  val wfi = 0
+
+  var priv_mode = PRIV_MODES.machine
 
   // Non-persisting state
   var update_pc = true
 
   fun interpret(cyclesToInterpret: Int): Boolean {
-    // Optimization: only check certain things every 16 cycles
-    // TODO: check for interrupts
+    // Optimization: only check certain things every n cycles
+    // Check interrupts
+    handleInterrupts()
+
     repeat(cyclesToInterpret) { partialCycles ->
       try {
         cycle()
@@ -100,12 +120,163 @@ class Hart(val vm: RiscWM) {
       } catch (e: CPU_EBREAK) {
         cycle += partialCycles
         return false
+      } catch (e: CPU_TRAP) {
+        handleTrap(e.trap)
       } catch (e: Exception) {
         cycle += partialCycles
         throw Exception("error @ ${pc.toString(16)}", e)
       }
     }
     cycle += cyclesToInterpret
+    return true
+  }
+
+  fun handleInterrupts() {
+    val interrupts = MSIE and MSIP
+
+    fun handleInterrupt(bit: Int, type: TrapType): Boolean {
+      val mask = 1 shl bit
+      if (mask and interrupts > 0) {
+        val trap = Trap(
+          type = type,
+          pc = pc,
+          value = 0
+        )
+        if (handleTrap(trap)) {
+          // TODO: Should we clear interrupts? The simulator I am referencing does
+          // But I think the spec says no
+          MSIP = MSIP and mask.inv()
+          return true
+        }
+      }
+      return false
+    }
+    if (handleInterrupt(INTERRUPT_BITS.MEI, TrapType.MachineExternalInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.MSI, TrapType.MachineSoftwareInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.MTI, TrapType.MachineTimerInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.SEI, TrapType.SupervisorExternalInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.SSI, TrapType.SupervisorSoftwareInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.STI, TrapType.SupervisorTimerInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.UEI, TrapType.UserExternalInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.USI, TrapType.UserSoftwareInterrupt)) {
+      return
+    }
+    if (handleInterrupt(INTERRUPT_BITS.UTI, TrapType.UserTimerInterrupt)) {
+      return
+    }
+  }
+
+  /** returns true if the trap was handled, false otherwise */
+  fun handleTrap(trap: Trap): Boolean {
+    println("TRAP!!!")
+
+    // Figure out which priv mode should handle this
+    // This is mostly ported from a different simulator
+    // should verify against spec
+    val currentMode = priv_mode
+    val mdeleg = if (trap.type.interrupt) mideleg else medeleg
+    val newMode = if (((mdeleg shr trap.type.cause) and 1) == 0) {
+      PRIV_MODES.machine
+    } else {
+      val sdeleg = if (trap.type.interrupt) sideleg else sedeleg
+      if (((sdeleg shr trap.type.cause) and 1) == 0) {
+        PRIV_MODES.supervisor
+      } else {
+        PRIV_MODES.user
+      }
+    }
+
+    // Ignore if disabled interrupt
+    if (trap.type.interrupt) {
+      // Interrupts aren enabled if new > current
+      // Interrupts are disabled if new < current
+      // Interrupts are enabled if new == current and xIE is 1
+      val enabled = when {
+        newMode > currentMode -> true
+        newMode < currentMode -> false
+        else -> when (currentMode) {
+          PRIV_MODES.machine -> MIE == 1
+          PRIV_MODES.supervisor -> SIE == 1
+          PRIV_MODES.user -> UIE == 1
+          else -> throw IllegalStateException("Invalid priv mode!")
+        }
+
+      }
+      if (!enabled) {
+        return false
+      }
+
+      val interruptEnabled = when (trap.type) {
+        TrapType.MachineExternalInterrupt -> MEIE == 1
+        TrapType.SupervisorExternalInterrupt -> SEIE == 1
+        TrapType.UserExternalInterrupt -> UEIE == 1
+        TrapType.MachineTimerInterrupt -> MTIE == 1
+        TrapType.SupervisorTimerInterrupt -> STIE == 1
+        TrapType.UserTimerInterrupt -> UTIE == 1
+        TrapType.MachineSoftwareInterrupt -> MSIE == 1
+        TrapType.SupervisorSoftwareInterrupt -> SSIE == 1
+        TrapType.UserSoftwareInterrupt -> USIE == 1
+        else -> throw IllegalStateException("Invalid interrup type in trap handler!")
+      }
+      if (!interruptEnabled) {
+        return false
+      }
+    }
+
+    priv_mode = newMode
+    when (newMode) {
+      PRIV_MODES.machine -> {
+        mepc = trap.pc.toInt()
+        mcause = trap.type.cause
+        mtval = trap.value
+        pc = mtvec_base.toUInt()
+        if (mtvec_mode == MTVEC_MODES.vectored) {
+          pc += trap.type.code.toUInt() * 4u
+        }
+        MPIE = MIE
+        MIE = 0
+        MPP = currentMode
+      }
+      PRIV_MODES.supervisor -> {
+        sepc = trap.pc.toInt()
+        scause = trap.type.cause
+        stval = trap.value
+        pc = stvec_base.toUInt()
+        if (stvec_mode == MTVEC_MODES.vectored) {
+          pc += trap.type.code.toUInt() * 4u
+        }
+        SPIE = SIE
+        SIE = 0
+        SPP = currentMode
+      }
+      PRIV_MODES.user -> {
+        uepc = trap.pc.toInt()
+        ucause = trap.type.cause
+        utval = trap.value
+        pc = utvec_base.toUInt()
+        if (utvec_mode == MTVEC_MODES.vectored) {
+          pc += trap.type.code.toUInt() * 4u
+        }
+        UPIE = UIE
+        UIE = 0
+      }
+      else -> throw IllegalStateException("Invalid priv mode!")
+    }
+
     return true
   }
 
@@ -152,6 +323,30 @@ class Hart(val vm: RiscWM) {
       CSR_ID.misa, CSR_ID.mvendorid, CSR_ID.marchid, CSR_ID.mimpid -> 0
       CSR_ID.mhartid -> hartID
       CSR_ID.mstatus -> readMachineStatusRaw()
+      CSR_ID.mip -> readMachineInterruptPending()
+      CSR_ID.mie -> readMachineInterruptEnable()
+      CSR_ID.medeleg -> medeleg
+      CSR_ID.mideleg -> mideleg
+      CSR_ID.sedeleg -> sedeleg
+      CSR_ID.sideleg -> sideleg
+      // Machine trap
+      CSR_ID.mscratch -> mscratch
+      CSR_ID.mepc -> mepc
+      CSR_ID.mcause -> mcause
+      CSR_ID.mtval -> mtval
+      CSR_ID.mtvec -> mtvec_base or mtvec_mode
+      // Supervisor trap
+      CSR_ID.sscratch -> sscratch
+      CSR_ID.sepc -> sepc
+      CSR_ID.scause -> scause
+      CSR_ID.stval -> stval
+      CSR_ID.stvec -> stvec_base or stvec_mode
+      // User trap
+      CSR_ID.uscratch -> uscratch
+      CSR_ID.uepc -> uepc
+      CSR_ID.ucause -> ucause
+      CSR_ID.utval -> utval
+      CSR_ID.utvec -> utvec_base or utvec_mode
       else -> csr[csrNum]
     }
   }
@@ -164,6 +359,39 @@ class Hart(val vm: RiscWM) {
       CSR_ID.mcycleh, CSR_ID.minstreth ->
         cycle = (cycle and 0xFFFF_FFFFL) or ((value.toLong() and 0xFFFF_FFFFL) shl 32)
       CSR_ID.mstatus -> writeMachineStatusRaw(value)
+      CSR_ID.mip -> writeMachineInterruptPending(value)
+      CSR_ID.mie -> writeMachineInterruptEnable(value)
+      CSR_ID.medeleg -> medeleg = value
+      CSR_ID.mideleg -> mideleg = value
+      CSR_ID.sedeleg -> sedeleg = value
+      CSR_ID.sideleg -> sideleg = value
+      // Machine trap
+      CSR_ID.mscratch -> mscratch = value
+      CSR_ID.mepc -> mepc = value
+      CSR_ID.mcause -> mcause = value
+      CSR_ID.mtval -> mtval = value
+      CSR_ID.mtvec -> {
+        mtvec_base = value and (0b11.inv())
+        mtvec_mode = value and 0b11
+      }
+      // Supervisor trap
+      CSR_ID.sscratch -> sscratch = value
+      CSR_ID.sepc -> sepc = value
+      CSR_ID.scause -> scause = value
+      CSR_ID.stval -> stval = value
+      CSR_ID.stvec -> {
+        stvec_base = value and (0b11.inv())
+        stvec_mode = value and 0b11
+      }
+      // User trap
+      CSR_ID.uscratch -> uscratch = value
+      CSR_ID.uepc -> uepc = value
+      CSR_ID.ucause -> ucause = value
+      CSR_ID.utval -> utval = value
+      CSR_ID.utvec -> {
+        utvec_base = value and (0b11.inv())
+        utvec_mode = value and 0b11
+      }
       else -> csr[csrNum] = value
     }
   }
@@ -189,45 +417,131 @@ class Hart(val vm: RiscWM) {
 
 
   private fun readMachineStatusRaw(): Int {
-    return (SD shl 31) or
-      (TSR shl 22) or
-      (TW shl 21) or
-      (TVM shl 20) or
-      (MXR shl 19) or
-      (SUM shl 18) or
-      (MPRV shl 17) or
-      (XS shl 15) or
-      (FS shl 13) or
-      (MPP shl 11) or
-      (SPP shl 8) or
-      (MPIE shl 7) or
-      (SPIE shl 5) or
-      (UPIE shl 4) or
-      (MIE shl 3) or
-      (SIE shl 1) or
-      (UIE shl 0)
+    return (SD shr 31) or
+      (TSR shr 22) or
+      (TW shr 21) or
+      (TVM shr 20) or
+      (MXR shr 19) or
+      (SUM shr 18) or
+      (MPRV shr 17) or
+      (XS shr 15) or
+      (FS shr 13) or
+      (MPP shr 11) or
+      (SPP shr 8) or
+      (MPIE shr 7) or
+      (SPIE shr 5) or
+      (UPIE shr 4) or
+      (MIE shr 3) or
+      (SIE shr 1) or
+      (UIE shr 0)
   }
 
   private fun writeMachineStatusRaw(value: Int) {
-//    SD = (value shr 31) and 0b1
-    TSR = (value shr 22) and 0b1
-    TW = (value shr 21) and 0b1
-    TVM = (value shr 20) and 0b1
-    MXR = (value shr 19) and 0b1
-    SUM = (value shr 18) and 0b1
-    MPRV = (value shr 17) and 0b1
-    //XS = (value shr 15) and 0b11
-    //FS = (value shr 13) and 0b11
-    MPP = (value shr 11) and 0b11
-    SPP = (value shr 8) and 0b1
-    MPIE = (value shr 7) and 0b1
-    SPIE = (value shr 5) and 0b1
-    UPIE = (value shr 4) and 0b1
-    MIE = (value shr 3) and 0b1
-    SIE = (value shr 1) and 0b1
-    UIE = (value shr 0) and 0b1
+//    SD = (value ushr 31) and 0b1
+    TSR = (value ushr 22) and 0b1
+    TW = (value ushr 21) and 0b1
+    TVM = (value ushr 20) and 0b1
+    MXR = (value ushr 19) and 0b1
+    SUM = (value ushr 18) and 0b1
+    MPRV = (value ushr 17) and 0b1
+    //XS = (value ushr 15) and 0b11
+    //FS = (value ushr 13) and 0b11
+    MPP = (value ushr 11) and 0b11
+    SPP = (value ushr 8) and 0b1
+    MPIE = (value ushr 7) and 0b1
+    SPIE = (value ushr 5) and 0b1
+    UPIE = (value ushr 4) and 0b1
+    MIE = (value ushr 3) and 0b1
+    SIE = (value ushr 1) and 0b1
+    UIE = (value ushr 0) and 0b1
+  }
+
+  private fun readMachineInterruptPending(): Int {
+    return (MEIP shl INTERRUPT_BITS.MEI) or
+      (SEIP shl INTERRUPT_BITS.SEI) or
+      (UEIP shl INTERRUPT_BITS.UEI) or
+      (MTIP shl INTERRUPT_BITS.MTI) or
+      (STIP shl INTERRUPT_BITS.STI) or
+      (UTIP shl INTERRUPT_BITS.UTI) or
+      (MSIP shl INTERRUPT_BITS.MSI) or
+      (SSIP shl INTERRUPT_BITS.SSI) or
+      (USIP shl INTERRUPT_BITS.USI)
+  }
+
+  private fun writeMachineInterruptPending(value: Int) {
+    //MEIP = (value ushr INTERRUPT_BITS.MEI) and 0b1
+    SEIP = (value ushr INTERRUPT_BITS.SEI) and 0b1
+    UEIP = (value ushr INTERRUPT_BITS.UEI) and 0b1
+    //MTIP = (value ushr INTERRUPT_BITS.MTI) and 0b1
+    STIP = (value ushr INTERRUPT_BITS.STI) and 0b1
+    UTIP = (value ushr INTERRUPT_BITS.UTI) and 0b1
+    MSIP = (value ushr INTERRUPT_BITS.MSI) and 0b1
+    SSIP = (value ushr INTERRUPT_BITS.SSI) and 0b1
+    USIP = (value ushr INTERRUPT_BITS.USI) and 0b1
+  }
+
+  private fun readMachineInterruptEnable(): Int {
+    return (MEIE shl INTERRUPT_BITS.MEI) or
+      (SEIE shl INTERRUPT_BITS.SEI) or
+      (UEIE shl INTERRUPT_BITS.UEI) or
+      (MTIE shl INTERRUPT_BITS.MTI) or
+      (STIE shl INTERRUPT_BITS.STI) or
+      (UTIE shl INTERRUPT_BITS.UTI) or
+      (MSIE shl INTERRUPT_BITS.MSI) or
+      (SSIE shl INTERRUPT_BITS.SSI) or
+      (USIE shl INTERRUPT_BITS.USI)
+  }
+
+  private fun writeMachineInterruptEnable(value: Int) {
+    MEIE = (value ushr INTERRUPT_BITS.MEI) and 0b1
+    SEIE = (value ushr INTERRUPT_BITS.SEI) and 0b1
+    UEIE = (value ushr INTERRUPT_BITS.UEI) and 0b1
+    MTIE = (value ushr INTERRUPT_BITS.MTI) and 0b1
+    STIE = (value ushr INTERRUPT_BITS.STI) and 0b1
+    UTIE = (value ushr INTERRUPT_BITS.UTI) and 0b1
+    MSIE = (value ushr INTERRUPT_BITS.MSI) and 0b1
+    SSIE = (value ushr INTERRUPT_BITS.SSI) and 0b1
+    USIE = (value ushr INTERRUPT_BITS.USI) and 0b1
   }
 }
+
+enum class TrapType(val interrupt: Boolean, val code: Int) {
+  // Interrupts
+  MachineExternalInterrupt(true, INTERRUPT_BITS.MEI),
+  SupervisorExternalInterrupt(true, INTERRUPT_BITS.SEI),
+  UserExternalInterrupt(true, INTERRUPT_BITS.UEI),
+  MachineTimerInterrupt(true, INTERRUPT_BITS.MEI),
+  SupervisorTimerInterrupt(true, INTERRUPT_BITS.STI),
+  UserTimerInterrupt(true, INTERRUPT_BITS.UTI),
+  MachineSoftwareInterrupt(true, INTERRUPT_BITS.MSI),
+  SupervisorSoftwareInterrupt(true, INTERRUPT_BITS.SSI),
+  UserSoftwareInterrupt(true, INTERRUPT_BITS.USI),
+
+  // Exceptions
+  InstructionAddressMisaligned(false, 0),
+  InstructionAccessFault(false, 1),
+  IllegalInstruction(false, 2),
+  Breakpoint(false, 3),
+  LoadAddressMisaligned(false, 4),
+  LoadAccessFault(false, 5),
+  StoreOrAMOAaddressMisaligned(false, 6),
+  StoreOrAMOAccessFault(false, 7),
+  EnvironmentCallFromUser(false, 8),
+  EnvironmentCallFromSupervisor(false, 9),
+  EnvironmentCallFromMachine(false, 11),
+  InstructionPageFault(false, 12),
+  LoadPageFault(false, 13),
+  StoreOrAMOPageFault(false, 15),
+  ;
+
+  val cause = (if (interrupt) 0x8000_0000u.toInt() else 0) or code
+}
+
+data class Trap(
+  val type: TrapType,
+  val pc: UInt,
+  val value: Int
+)
 
 object CSR_ID {
   // User read/write
@@ -341,7 +655,7 @@ object CSR_ID {
 
 object PRIV_MODES {
   val user = 0
-  val system = 1
+  val supervisor = 1
   val hypervisor = 2 // not supported, atm
   val machine = 3
 }
@@ -369,4 +683,16 @@ object ROUNDING_MODE {
 object MTVEC_MODES {
   val direct = 0
   val vectored = 1
+}
+
+object INTERRUPT_BITS {
+  val MEI = 11
+  val SEI = 9
+  val UEI = 8
+  val MTI = 7
+  val STI = 5
+  val UTI = 4
+  val MSI = 3
+  val SSI = 1
+  val USI = 0
 }

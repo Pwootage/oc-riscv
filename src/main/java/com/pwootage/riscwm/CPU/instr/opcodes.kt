@@ -1,8 +1,6 @@
 package com.pwootage.riscwm.CPU.instr
 
-import com.pwootage.riscwm.CPU.Hart
-import com.pwootage.riscwm.CPU.CPU_EBREAK
-import com.pwootage.riscwm.CPU.RiscVInstruction
+import com.pwootage.riscwm.CPU.*
 import java.lang.Float.min
 import java.lang.IllegalStateException
 import kotlin.math.max
@@ -98,8 +96,7 @@ object OPCODES {
   val SYSTEM = 0b1110011
 
   object SYSTEM_FUNCT3 {
-    val ECALL = 0b000
-    val EBREAK = 0b000
+    val PRIV = 0b000
     val CSRRW = 0b001
     val CSRRS = 0b010
     val CSRRC = 0b011
@@ -107,9 +104,13 @@ object OPCODES {
     val CSRRSI = 0b110
     val CSRRCI = 0b111
   }
+
   object SYSTEM_FUNCT12 {
     val ECALL = 0b000000000000
     val EBREAK = 0b000000000001
+    val MRET = 0b000000000010
+    val SRET = 0b000100000010
+    val URET = 0b001100000010
   }
 
   val LOAD_FP = 0b0000111
@@ -179,6 +180,14 @@ object OPCODES {
 
 val CANONICAL_NAN = Float.NaN
 
+fun RiscVInstruction.invalidInstruction(hart: Hart): Nothing {
+  throw CPU_TRAP(Trap(
+    type = TrapType.IllegalInstruction,
+    pc = hart.pc,
+    value = instr
+  ))
+}
+
 fun RiscVInstruction.exec(hart: Hart) {
   val c = c_opcpde
   if (c != 0b11) {
@@ -204,8 +213,7 @@ fun RiscVInstruction.exec(hart: Hart) {
       OPCODES.LOAD_FP -> load_fp(hart)
       OPCODES.STORE_FP -> store_fp(hart)
       OPCODES.OP_FP -> op_fp(hart)
-      // TODO: throw interrupt instead
-      else -> throw IllegalStateException("Invalid opcode")
+      else -> invalidInstruction(hart)
     }
     if (hart.update_pc) {
       hart.pc += 4u
@@ -224,7 +232,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
             (bits(6) shl 2) or
             (bits(7, 10) shl 6) or
             (bits(11, 12) shl 4)
-          if (imm == 0) throw IllegalStateException("Invalid C.ADDI4SPN immediate/invalid instruction (all zeros)") // TODO: CPU exception
+          if (imm == 0) invalidInstruction(hart)
           val res = hart.x[2] + imm
           hart.setx(c_rs2_prime, res)
         }
@@ -248,7 +256,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
           val addr = hart.x[c_rs1_prime] + imm
           hart.vm.mmu.write32(addr.toUInt(), hart.x[c_rs2_prime])
         }
-        else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       }
     }
     0b01 -> {
@@ -287,13 +295,13 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
                 (bits(5) shl 6) or
                 (bits(6) shl 4) or
                 ((bits(12) shl 31) shr (31 - 9))
-              if (imm == 0) throw IllegalStateException("Invalid C.ADDI16SP immediate") // TODO: CPU exception
+              if (imm == 0) invalidInstruction(hart)
               val sp = hart.x[2] + imm
               hart.x[2] = sp
             }
             else -> { //C.LUI
               val imm = (bits(2, 6) shl 12) or ((bits(12) shl 31) shr (31 - 17))
-              if (imm == 0) throw IllegalStateException("Invalid C.LUI immediate") // TODO: CPU exception
+              if (imm == 0) invalidInstruction(hart)
               hart.setx(rd, imm)
             }
           }
@@ -318,7 +326,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
             0b11 -> {
               when (bits(12)) {
                 0b0 -> {
-                  when(bits(5,6)) {
+                  when (bits(5, 6)) {
                     0b00 -> { // C.SUB
                       val res = hart.x[c_rs1] - hart.x[c_rs2]
                       hart.setx(c_rs1, res)
@@ -337,9 +345,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
                     }
                   }
                 }
-                else -> {
-                  throw IllegalStateException("Invalid compressed instruction") // TODO: CPU exception
-                }
+                else -> invalidInstruction(hart)
               }
             }
           }
@@ -381,7 +387,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
             hart.update_pc = false
           }
         }
-        else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       }
     }
     0b10 -> {
@@ -398,7 +404,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
         }
         0b010 -> { //C.LWSP
           if (c_rs1 == 0) {
-            throw IllegalStateException("Illegal c.lwsp target") // TODO: CPU exception
+            invalidInstruction(hart)
           }
           val imm = (bits(2, 3) shl 6) or (bits(12) shl 5) or (bits(4, 6) shl 2)
           val addr = imm + hart.x[2]
@@ -447,10 +453,10 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
           val addr = imm + hart.x[2]
           hart.vm.mmu.write32(addr.toUInt(), hart.x[c_rs2])
         }
-        else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       }
     }
-    else -> throw IllegalStateException("Invalid compressed opcode") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
 }
 
@@ -584,7 +590,7 @@ inline fun RiscVInstruction.b(hart: Hart) {
     OPCODES.B_FUNCT3.BLTU -> src1.toUInt() < src2.toUInt()
     OPCODES.B_FUNCT3.BGE -> src1 >= src2
     OPCODES.B_FUNCT3.BGEU -> src1.toUInt() >= src2.toUInt()
-    else -> throw IllegalStateException("Invalid branch funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
   if (takeBranch) {
     // PC is still equal to this instruction
@@ -603,7 +609,7 @@ inline fun RiscVInstruction.load(hart: Hart) {
     OPCODES.LOAD_FUNCT3.LBU -> hart.vm.mmu.read8(addr).toInt() and 0xFF
     OPCODES.LOAD_FUNCT3.LH -> hart.vm.mmu.read16(addr).toInt()
     OPCODES.LOAD_FUNCT3.LHU -> hart.vm.mmu.read16(addr).toInt() and 0xFFFF
-    else -> throw IllegalStateException("Invalid load funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
   hart.setx(rd, v)
 }
@@ -615,7 +621,7 @@ inline fun RiscVInstruction.store(hart: Hart) {
     OPCODES.STORE_FUNCT3.SW -> hart.vm.mmu.write32(addr, value)
     OPCODES.STORE_FUNCT3.SB -> hart.vm.mmu.write8(addr, value.toByte())
     OPCODES.STORE_FUNCT3.SH -> hart.vm.mmu.write16(addr, value.toShort())
-    else -> throw IllegalStateException("Invalid write funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
 }
 
@@ -628,23 +634,54 @@ inline fun RiscVInstruction.misc_mem(hart: Hart) {
     OPCODES.MISC_MEM_FUNCT3.FENCE_I -> {
       //noop, unless we add an instruction cache
     }
-    else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
 }
 
 fun RiscVInstruction.system(hart: Hart) {
   when (funct3) {
-    OPCODES.SYSTEM_FUNCT3.EBREAK/*, OPCODES.SYSTEM_FUNCT3.ECALL*/ -> {
+    OPCODES.SYSTEM_FUNCT3.PRIV -> {
       when (immed_i) {
         OPCODES.SYSTEM_FUNCT12.ECALL -> {
-          //noop
-          // TODO: implement this
+          val type = when (hart.priv_mode) {
+            PRIV_MODES.machine -> TrapType.EnvironmentCallFromMachine
+            PRIV_MODES.supervisor -> TrapType.EnvironmentCallFromSupervisor
+            PRIV_MODES.user -> TrapType.EnvironmentCallFromUser
+            else -> throw IllegalStateException("Invalid priv mode!")
+          }
+          throw CPU_TRAP(
+            Trap(
+              type = type,
+              pc = hart.pc,
+              value = 0
+            )
+          )
         }
         OPCODES.SYSTEM_FUNCT12.EBREAK -> {
           hart.pc += 4u // Exception prevents PC increment
           throw CPU_EBREAK()
         }
-        else -> throw IllegalStateException("Invalid system funct12") // TODO: CPU exception
+        OPCODES.SYSTEM_FUNCT12.MRET -> {
+          if (hart.priv_mode < PRIV_MODES.machine) invalidInstruction(hart)
+          hart.MIE = hart.MPIE
+          hart.MPIE = 1
+          val mpp = hart.MPP
+          hart.MPP = 0
+          hart.priv_mode = mpp
+        }
+        OPCODES.SYSTEM_FUNCT12.SRET -> {
+          if (hart.priv_mode < PRIV_MODES.supervisor) invalidInstruction(hart)
+          hart.SIE = hart.SPIE
+          hart.SPIE = 1
+          val spp = hart.SPP
+          hart.SPP = 0
+          hart.priv_mode = spp
+        }
+        OPCODES.SYSTEM_FUNCT12.URET -> {
+          hart.UIE = hart.UPIE
+          hart.UPIE = 1
+        }
+        else -> invalidInstruction(hart)
       }
     }
     OPCODES.SYSTEM_FUNCT3.CSRRW -> {
@@ -717,7 +754,7 @@ fun RiscVInstruction.system(hart: Hart) {
       )
       hart.setx(rd, old!!)
     }
-    else -> throw IllegalStateException("Invalid system funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
 
 }
@@ -733,7 +770,7 @@ inline fun RiscVInstruction.load_fp(hart: Hart) {
       val v = hart.vm.mmu.read64(addr)
       hart.d[rd] = v
     }
-    else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
 }
 
@@ -748,7 +785,7 @@ inline fun RiscVInstruction.store_fp(hart: Hart) {
       val v = hart.d[rs2]
       hart.vm.mmu.write64(addr, v)
     }
-    else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    else -> invalidInstruction(hart)
   }
 }
 
@@ -767,22 +804,21 @@ inline fun RiscVInstruction.op_fp(hart: Hart) {
         rd, when (rm) {
         OPCODES.OP_FP_MIN_MAX_RM.MIN -> min(src1, src2) // This should be correct for nan handling, I think
         OPCODES.OP_FP_MIN_MAX_RM.MAX -> max(src1, src2)
-        else -> throw IllegalStateException("Invalid minmax mode") // TODO: CPU exception
-      }
-      )
+        else -> invalidInstruction(hart)
+      })
       // TODO: flags, possibly missing edge cases
       OPCODES.OP_FP_FUNCT5.FCVT_W_S -> hart.setx(
         rd, when (rs2) {
         OPCODES.OP_FP_CVT_MODE.W -> src1.toInt()
         OPCODES.OP_FP_CVT_MODE.WU -> src1.toUInt().toInt()
-        else -> throw IllegalStateException("Invalid convert mode") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       }
       )
       OPCODES.OP_FP_FUNCT5.FCVT_S_W -> hart.setf(
         rd, when (rs2) {
         OPCODES.OP_FP_CVT_MODE.W -> hart.x[rs1].toFloat()
         OPCODES.OP_FP_CVT_MODE.WU -> hart.x[rs1].toUInt().toFloat()
-        else -> throw IllegalStateException("Invalid convert mode") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       }
       )
       OPCODES.OP_FP_FUNCT5.FSGNJ -> hart.setf(
@@ -790,7 +826,7 @@ inline fun RiscVInstruction.op_fp(hart: Hart) {
         OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJ_S -> src1.withSign(src2)
         OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJN_S -> src1.withSign(-src2)
         OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJX_S -> src1.withSign(src1 * src2)
-        else -> throw IllegalStateException("Invalid sign injection mode") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       }
       )
       OPCODES.OP_FP_FUNCT5.FMV_W_X -> hart.d[rd] = hart.x[rs1].toLong() or 0xFFFF_FFFF_0000_0000u.toLong()
@@ -832,21 +868,21 @@ inline fun RiscVInstruction.op_fp(hart: Hart) {
           }
           clazz
         }
-        else -> throw IllegalStateException("Invalid FMV/FCLASS mode") // TODO: CPU exception
+        else -> invalidInstruction(hart)
       })
       OPCODES.OP_FP_FUNCT5.FCMP -> hart.setx(
         rd, if (when (funct3) {
           OPCODES.OP_FP_FCMP_FUNCT3.FEQ -> src1 == src2
           OPCODES.OP_FP_FCMP_FUNCT3.FLE -> src1 <= src2
           OPCODES.OP_FP_FCMP_FUNCT3.FLT -> src1 < src2
-          else -> throw IllegalStateException("Invalid float comparison") // TODO: CPU exception
+          else -> invalidInstruction(hart)
         }
       ) 1 else 0
       )
-      else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+      else -> invalidInstruction(hart)
     }
   } else {
     // TODO: double
-    throw IllegalStateException("Double not yet supported") // TODO: CPU exception
+    invalidInstruction(hart)
   }
 }
