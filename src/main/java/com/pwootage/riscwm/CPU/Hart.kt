@@ -3,6 +3,7 @@ package com.pwootage.riscwm.CPU
 import com.pwootage.riscwm.CPU.instr.CANONICAL_NAN
 import com.pwootage.riscwm.CPU.instr.exec
 import com.pwootage.riscwm.RiscWM
+import com.sun.org.apache.xpath.internal.operations.Bool
 import java.lang.Exception
 import java.lang.IllegalArgumentException
 import java.lang.IllegalStateException
@@ -110,6 +111,8 @@ class Hart(val vm: RiscWM, val hartID: Int) {
 
   fun interpret(cyclesToInterpret: Int): Boolean {
     // Optimization: only check certain things every n cycles
+    // Trigger interrupts (e.g. timers)
+    triggerInterrupts()
     // Check interrupts
     handleInterrupts()
 
@@ -131,52 +134,81 @@ class Hart(val vm: RiscWM, val hartID: Int) {
     return true
   }
 
-  fun handleInterrupts() {
-    val interrupts = MSIE and MSIP
+  fun triggerInterrupts() {
+    val time = vm.readTime()
+    if (time >= mtimecmp) {
+      MTIP = 1
+    }
+  }
 
-    fun handleInterrupt(bit: Int, type: TrapType): Boolean {
-      val mask = 1 shl bit
-      if (mask and interrupts > 0) {
-        val trap = Trap(
-          type = type,
-          pc = pc,
-          value = 0
-        )
-        if (handleTrap(trap)) {
-          // TODO: Should we clear interrupts? The simulator I am referencing does
-          // But I think the spec says no
-          MSIP = MSIP and mask.inv()
-          return true
-        }
+  fun handleInterrupts() {
+    // Machine
+    if (MEIP and MEIE > 0) {
+      val trap = Trap(type = TrapType.MachineExternalInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        // TODO: Should we clear interrupts? The simulator I am referencing does
+        // But I think the spec says no?
+        MEIP = 0
+        return
       }
-      return false
     }
-    if (handleInterrupt(INTERRUPT_BITS.MEI, TrapType.MachineExternalInterrupt)) {
-      return
+    if (MSIP and MSIE > 0) {
+      val trap = Trap(type = TrapType.MachineSoftwareInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        MSIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.MSI, TrapType.MachineSoftwareInterrupt)) {
-      return
+    if (MTIP and MTIE > 0) {
+      val trap = Trap(type = TrapType.MachineTimerInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        MTIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.MTI, TrapType.MachineTimerInterrupt)) {
-      return
+    // Supervisor
+    if (SEIP and SEIE > 0) {
+      val trap = Trap(type = TrapType.SupervisorExternalInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        SEIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.SEI, TrapType.SupervisorExternalInterrupt)) {
-      return
+    if (SSIP and SSIE > 0) {
+      val trap = Trap(type = TrapType.SupervisorSoftwareInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        SSIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.SSI, TrapType.SupervisorSoftwareInterrupt)) {
-      return
+    if (STIP and STIE > 0) {
+      val trap = Trap(type = TrapType.SupervisorTimerInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        STIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.STI, TrapType.SupervisorTimerInterrupt)) {
-      return
+    // User
+    if (UEIP and UEIE > 0) {
+      val trap = Trap(type = TrapType.UserExternalInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        UEIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.UEI, TrapType.UserExternalInterrupt)) {
-      return
+    if (USIP and USIE > 0) {
+      val trap = Trap(type = TrapType.UserSoftwareInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        USIP = 0
+        return
+      }
     }
-    if (handleInterrupt(INTERRUPT_BITS.USI, TrapType.UserSoftwareInterrupt)) {
-      return
-    }
-    if (handleInterrupt(INTERRUPT_BITS.UTI, TrapType.UserTimerInterrupt)) {
-      return
+    if (UTIP and UTIE > 0) {
+      val trap = Trap(type = TrapType.UserTimerInterrupt, pc = pc, value = 0)
+      if (handleTrap(trap)) {
+        UTIP = 0
+        return
+      }
     }
   }
 
