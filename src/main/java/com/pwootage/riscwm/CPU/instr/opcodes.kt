@@ -4,7 +4,6 @@ import com.pwootage.riscwm.CPU.CPU
 import com.pwootage.riscwm.CPU.RiscVInstruction
 import java.lang.Float.min
 import java.lang.IllegalStateException
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 import kotlin.math.withSign
@@ -97,6 +96,16 @@ object OPCODES {
 
   val SYSTEM = 0b1110011
 
+  object SYSTEM_FUNCT3 {
+    val ECALL = 0b000
+    val EBREAK = 0b000
+    val CSRRW = 0b001
+    val CSRRS = 0b010
+    val CSRRC = 0b011
+    val CSRRWI = 0b101
+    val CSRRSI = 0b110
+    val CSRRCI = 0b111
+  }
   object SYSTEM_FUNCT12 {
     val ECALL = 0b000000000000
     val EBREAK = 0b000000000001
@@ -169,26 +178,278 @@ object OPCODES {
 
 val CANONICAL_NAN = Float.NaN
 
-inline fun RiscVInstruction.exec(cpu: CPU) {
-  when (opcode) {
-    OPCODES.OP_IMM -> op_imm(cpu)
-    OPCODES.LUI -> lui(cpu)
-    OPCODES.AUIPC -> auipc(cpu)
-    OPCODES.OP -> op(cpu)
-    OPCODES.JAL -> jal(cpu)
-    OPCODES.JALR -> jalr(cpu)
-    OPCODES.B -> b(cpu)
-    OPCODES.LOAD -> load(cpu)
-    OPCODES.STORE -> store(cpu)
-    OPCODES.MISC_MEM -> misc_mem(cpu)
-    OPCODES.SYSTEM -> system(cpu)
-    OPCODES.LOAD_FP -> load_fp(cpu)
-    OPCODES.STORE_FP -> store_fp(cpu)
-    OPCODES.OP_FP -> op_fp(cpu)
-    // TODO: throw interrupt instead
-    else -> throw IllegalStateException("Invalid opcode")
+fun RiscVInstruction.exec(cpu: CPU) {
+  val c = c_opcpde
+  if (c != 0b11) {
+    exec_compressed(cpu, c)
+    if (cpu.update_pc) {
+      cpu.pc += 2u
+    } else {
+      cpu.update_pc = true
+    }
+  } else {
+    when (opcode) {
+      OPCODES.OP_IMM -> op_imm(cpu)
+      OPCODES.LUI -> lui(cpu)
+      OPCODES.AUIPC -> auipc(cpu)
+      OPCODES.OP -> op(cpu)
+      OPCODES.JAL -> jal(cpu)
+      OPCODES.JALR -> jalr(cpu)
+      OPCODES.B -> b(cpu)
+      OPCODES.LOAD -> load(cpu)
+      OPCODES.STORE -> store(cpu)
+      OPCODES.MISC_MEM -> misc_mem(cpu)
+      OPCODES.SYSTEM -> system(cpu)
+      OPCODES.LOAD_FP -> load_fp(cpu)
+      OPCODES.STORE_FP -> store_fp(cpu)
+      OPCODES.OP_FP -> op_fp(cpu)
+      // TODO: throw interrupt instead
+      else -> throw IllegalStateException("Invalid opcode")
+    }
+    if (cpu.update_pc) {
+      cpu.pc += 4u
+    } else {
+      cpu.update_pc = true
+    }
   }
-  cpu.pc += 4u
+}
+
+fun RiscVInstruction.exec_compressed(cpu: CPU, op: Int) {
+  when (op) {
+    0b00 -> {
+      when (c_funct3) {
+        0b000 -> { // C.ADDI4SPN
+          val imm = (bits(5) shl 3) or
+            (bits(6) shl 2) or
+            (bits(7, 10) shl 6) or
+            (bits(11, 12) shl 4)
+          if (imm == 0) throw IllegalStateException("Invalid C.ADDI4SPN immediate/invalid instruction (all zeros)") // TODO: CPU exception
+          val res = cpu.x[2] + imm
+          cpu.setx(c_rs2_prime, res)
+        }
+        0b001 -> { // C.FLD
+          val imm = (bits(10, 12) shl 3) or (bits(5, 6) shl 6)
+          val addr = cpu.x[c_rs1_prime] + imm
+          cpu.d[c_rs2_prime] = cpu.mmu.read64(addr.toUInt())
+        }
+        0b010 -> { // C.LW
+          val imm = (bits(6) shl 2) or (bits(10, 12) shl 3) or (bits(5) shl 6)
+          val addr = cpu.x[c_rs1_prime] + imm
+          cpu.setx(c_rs2_prime, cpu.mmu.read32(addr.toUInt()))
+        }
+        0b101 -> { // C.FSD
+          val imm = (bits(10, 12) shl 3) or (bits(5, 6) shl 6)
+          val addr = cpu.x[c_rs1_prime] + imm
+          cpu.mmu.write64(addr.toUInt(), cpu.d[c_rs2_prime])
+        }
+        0b110 -> { // C.SW
+          val imm = (bits(6) shl 2) or (bits(10, 12) shl 3) or (bits(5) shl 6)
+          val addr = cpu.x[c_rs1_prime] + imm
+          cpu.mmu.write32(addr.toUInt(), cpu.x[c_rs2_prime])
+        }
+        else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
+      }
+    }
+    0b01 -> {
+      when (c_funct3) {
+        0b000 -> { // C.ADDI C.NOP
+          val imm = bits(2, 6) or
+            ((bits(12) shl 31) shr (31 - 5))
+          val src = cpu.x[c_rs1]
+          cpu.setx(c_rs1, src + imm)
+        }
+        0b001 -> { // C.JAL
+          val offset = (bits(2) shl 5) or
+            (bits(3, 5) shl 1) or
+            (bits(6) shl 7) or
+            (bits(7) shl 6) or
+            (bits(8) shl 10) or
+            (bits(9, 10) shl 8) or
+            (bits(11) shl 4) or
+            ((bits(12) shl 31) shr (31 - 11))
+          val oldPC = cpu.pc
+          val newPC = oldPC.toInt() + offset
+          cpu.pc = newPC.toUInt()
+          cpu.update_pc = false
+          cpu.setx(1, oldPC.toInt() + 2)
+        }
+        0b010 -> { // C.LI
+          val imm = bits(2, 6) or
+            ((bits(12) shl 31) shr (31 - 5))
+          cpu.setx(c_rs1, imm)
+        }
+        0b011 -> {
+          when (val rd = c_rs1) {
+            2 -> { // C.ADDI16SP
+              val imm = (bits(2) shl 5) or
+                (bits(3, 4) shl 7) or
+                (bits(5) shl 6) or
+                (bits(6) shl 4) or
+                ((bits(12) shl 31) shr (31 - 9))
+              if (imm == 0) throw IllegalStateException("Invalid C.ADDI16SP immediate") // TODO: CPU exception
+              val sp = cpu.x[2] + imm
+              cpu.x[2] = sp
+            }
+            else -> { //C.LUI
+              val imm = (bits(2, 6) shl 12) or ((bits(12) shl 31) shr (31 - 17))
+              if (imm == 0) throw IllegalStateException("Invalid C.LUI immediate") // TODO: CPU exception
+              cpu.setx(rd, imm)
+            }
+          }
+        }
+        0b100 -> {
+          when (bits(10, 11)) {
+            0b00 -> { // C.SRLI
+              val shamt = bits(2, 6)
+              val v = cpu.x[c_rs1] ushr shamt
+              cpu.setx(c_rs1, v)
+            }
+            0b01 -> { //C.SRAI
+              val shamt = bits(2, 6)
+              val v = cpu.x[c_rs1] shr shamt
+              cpu.setx(c_rs1, v)
+            }
+            0b10 -> { //C.ANDI
+              val imm = bits(2, 6) or ((bits(12) shl 31) shr (31 - 5))
+              val v = cpu.x[c_rs1] and imm
+              cpu.setx(c_rs1, v)
+            }
+            0b11 -> {
+              when (bits(12)) {
+                0b0 -> {
+                  when(bits(5,6)) {
+                    0b00 -> { // C.SUB
+                      val res = cpu.x[c_rs1] - cpu.x[c_rs2]
+                      cpu.setx(c_rs1, res)
+                    }
+                    0b01 -> { // C.XOR
+                      val res = cpu.x[c_rs1] xor cpu.x[c_rs2]
+                      cpu.setx(c_rs1, res)
+                    }
+                    0b10 -> { // C.OR
+                      val res = cpu.x[c_rs1] or cpu.x[c_rs2]
+                      cpu.setx(c_rs1, res)
+                    }
+                    0b11 -> { // C.AND
+                      val res = cpu.x[c_rs1] and cpu.x[c_rs2]
+                      cpu.setx(c_rs1, res)
+                    }
+                  }
+                }
+                else -> {
+                  throw IllegalStateException("Invalid compressed instruction") // TODO: CPU exception
+                }
+              }
+            }
+          }
+        }
+        0b101 -> { // C.J
+          val offset = (bits(2) shl 5) or
+            (bits(3, 5) shl 1) or
+            (bits(6) shl 7) or
+            (bits(7) shl 6) or
+            (bits(8) shl 10) or
+            (bits(9, 10) shl 8) or
+            (bits(11) shl 4) or
+            ((bits(12) shl 31) shr (31 - 11))
+          val newPC = cpu.pc.toInt() + offset
+          cpu.pc = newPC.toUInt()
+          cpu.update_pc = false
+        }
+        0b110 -> { // C.BEQZ
+          if (cpu.x[c_rs1_prime] == 0) {
+            val offset = (bits(2) shl 5) or
+              (bits(3, 4) shl 1) or
+              (bits(5, 6) shl 6) or
+              (bits(10, 11) shl 3) or
+              ((bits(12) shl 31) shr (31 - 8))
+            val newPC = cpu.pc.toInt() + offset
+            cpu.pc = newPC.toUInt()
+            cpu.update_pc = false
+          }
+        }
+        0b111 -> { // C.BNEZ
+          if (cpu.x[c_rs1_prime] != 0) {
+            val offset = (bits(2) shl 5) or
+              (bits(3, 4) shl 1) or
+              (bits(5, 6) shl 6) or
+              (bits(10, 11) shl 3) or
+              ((bits(12) shl 31) shr (31 - 8))
+            val newPC = cpu.pc.toInt() + offset
+            cpu.pc = newPC.toUInt()
+            cpu.update_pc = false
+          }
+        }
+        else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
+      }
+    }
+    0b10 -> {
+      when (c_funct3) {
+        0b000 -> { //C.SLLI
+          val shamt = bits(2, 6)
+          val v = cpu.x[c_rs1] shl shamt
+          cpu.setx(c_rs1, v)
+        }
+        0b001 -> { //C.FLDSP
+          val imm = (bits(2, 4) shl 6) or (bits(12) shl 5) or (bits(5, 6) shl 3)
+          val addr = imm + cpu.x[2]
+          cpu.d[c_rs1] = cpu.mmu.read64(addr.toUInt())
+        }
+        0b010 -> { //C.LWSP
+          if (c_rs1 == 0) {
+            throw IllegalStateException("Illegal c.lwsp target") // TODO: CPU exception
+          }
+          val imm = (bits(2, 3) shl 6) or (bits(12) shl 5) or (bits(4, 6) shl 2)
+          val addr = imm + cpu.x[2]
+          cpu.setx(c_rs1, cpu.mmu.read32(addr.toUInt()))
+        }
+        0b100 -> {
+          when (bits(12)) {
+            0b0 -> {
+              when {
+                c_rs1 != 0 && c_rs2 == 0 -> {  // C.JR
+                  cpu.pc = cpu.x[c_rs1].toUInt()
+                  cpu.update_pc = false
+                }
+                c_rs1 != 0 && c_rs2 != 0 -> {  // C.MV
+                  cpu.setx(c_rs1, cpu.x[c_rs2])
+                }
+              }
+            }
+            0b1 -> {
+              when {
+                c_rs1 == 0 && c_rs2 == 0 -> { // C.EBREAK
+                  cpu.user_halt = true
+                }
+                c_rs1 != 0 && c_rs2 == 0 -> { // C.JALR
+                  val oldPC = cpu.pc
+                  cpu.pc = cpu.x[c_rs1].toUInt()
+                  cpu.update_pc = false
+                  cpu.x[1] = oldPC.toInt() + 2
+                }
+                c_rs1 != 0 && c_rs2 != 0 -> { // C.ADD
+                  val res = cpu.x[c_rs1] + cpu.x[c_rs2]
+                  cpu.setx(c_rs1, res)
+                }
+              }
+            }
+          }
+        }
+        0b101 -> { //C.FSDSP
+          val imm = (bits(10, 12) shl 3) or (bits(7, 9) shl 6)
+          val addr = imm + cpu.x[2]
+          cpu.mmu.write64(addr.toUInt(), cpu.d[c_rs2])
+        }
+        0b110 -> { //C.SWSP
+          val imm = (bits(9, 12) shl 2) or (bits(7, 8) shl 6)
+          val addr = imm + cpu.x[2]
+          cpu.mmu.write32(addr.toUInt(), cpu.x[c_rs2])
+        }
+        else -> throw IllegalStateException("Invalid compressed funct3") // TODO: CPU exception
+      }
+    }
+    else -> throw IllegalStateException("Invalid compressed opcode") // TODO: CPU exception
+  }
 }
 
 inline fun RiscVInstruction.op_imm(cpu: CPU) {
@@ -296,7 +557,8 @@ inline fun RiscVInstruction.jal(cpu: CPU) {
   // PC is still equal to this instruction
   val oldPC = cpu.pc
   val newPC = oldPC.toInt() + immed_j
-  cpu.pc = newPC.toUInt() - 4u // Remove 4 because we'll increment after jumping
+  cpu.pc = newPC.toUInt()
+  cpu.update_pc = false
   cpu.setx(rd, oldPC.toInt() + 4)
 }
 
@@ -304,7 +566,8 @@ inline fun RiscVInstruction.jalr(cpu: CPU) {
   // PC is still equal to this instruction
   val oldPC = cpu.pc
   val newPC = (cpu.x[rs1] + immed_i) and 0b1.inv()
-  cpu.pc = newPC.toUInt() - 4u // Remove 4 because we'll increment after jumping
+  cpu.pc = newPC.toUInt()
+  cpu.update_pc = false
   cpu.setx(rd, oldPC.toInt() + 4)
 }
 
@@ -323,7 +586,8 @@ inline fun RiscVInstruction.b(cpu: CPU) {
   if (takeBranch) {
     // PC is still equal to this instruction
     val newPC = cpu.pc.toInt() + immed_b
-    cpu.pc = newPC.toUInt() - 4u // Remove 4 because it'll increment after execution
+    cpu.pc = newPC.toUInt()
+    cpu.update_pc = false
   }
 }
 
@@ -343,7 +607,7 @@ inline fun RiscVInstruction.load(cpu: CPU) {
 
 inline fun RiscVInstruction.store(cpu: CPU) {
   val value = cpu.x[rs2]
-  val addr = (cpu.x[rs1]+ immed_s).toUInt()
+  val addr = (cpu.x[rs1] + immed_s).toUInt()
   when (funct3) {
     OPCODES.STORE_FUNCT3.SW -> cpu.mmu.write32(addr, value)
     OPCODES.STORE_FUNCT3.SB -> cpu.mmu.write8(addr, value.toByte())
@@ -365,17 +629,93 @@ inline fun RiscVInstruction.misc_mem(cpu: CPU) {
   }
 }
 
-inline fun RiscVInstruction.system(cpu: CPU) {
-  when (immed_i) {
-    OPCODES.SYSTEM_FUNCT12.ECALL -> {
-      //noop
-      // TODO: implement this
+fun RiscVInstruction.system(cpu: CPU) {
+  when (funct3) {
+    OPCODES.SYSTEM_FUNCT3.EBREAK/*, OPCODES.SYSTEM_FUNCT3.ECALL*/ -> {
+      when (immed_i) {
+        OPCODES.SYSTEM_FUNCT12.ECALL -> {
+          //noop
+          // TODO: implement this
+        }
+        OPCODES.SYSTEM_FUNCT12.EBREAK -> {
+          cpu.user_halt = true
+        }
+        else -> throw IllegalStateException("Invalid system funct12") // TODO: CPU exception
+      }
     }
-    OPCODES.SYSTEM_FUNCT12.EBREAK -> {
-      cpu.user_halt = true
+    OPCODES.SYSTEM_FUNCT3.CSRRW -> {
+      val v = cpu.x[rs1]
+      val old = cpu.updateCsr(
+        immed_i and 0xFFF,
+        read = rd != 0,
+        write = { v }
+      )
+      if (old != null) {
+        cpu.setx(rd, old)
+      }
     }
-    else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    OPCODES.SYSTEM_FUNCT3.CSRRS -> {
+      val v = cpu.x[rs1]
+      val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
+        { it!! or v }
+      }
+      val old = cpu.updateCsr(
+        immed_i and 0xFFF,
+        read = true,
+        write = write
+      )
+      cpu.setx(rd, old!!)
+    }
+    OPCODES.SYSTEM_FUNCT3.CSRRC -> {
+      val v = cpu.x[rs1].inv()
+      val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
+        { it!! and v }
+      }
+      val old = cpu.updateCsr(
+        immed_i and 0xFFF,
+        read = true,
+        write = write
+      )
+      cpu.setx(rd, old!!)
+    }
+    OPCODES.SYSTEM_FUNCT3.CSRRWI -> {
+      val v = rs1
+      val old = cpu.updateCsr(
+        immed_i and 0xFFF,
+        read = rd != 0,
+        write = { v }
+      )
+      if (old != null) {
+        cpu.setx(rd, old)
+      }
+    }
+    OPCODES.SYSTEM_FUNCT3.CSRRSI -> {
+      val v = rs1
+      val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
+        { it!! or v }
+      }
+      val old = cpu.updateCsr(
+        immed_i and 0xFFF,
+        read = true,
+        write = write
+      )
+      cpu.setx(rd, old!!)
+    }
+    OPCODES.SYSTEM_FUNCT3.CSRRCI -> {
+      val v = rs1.inv()
+      val write: ((Int?) -> Int)? = if (rs1 == 0) null else {
+        { it!! and v }
+      }
+      val old = cpu.updateCsr(
+        immed_i and 0xFFF,
+        read = true,
+        write = write
+      )
+      cpu.setx(rd, old!!)
+    }
+    else -> throw IllegalStateException("Invalid system funct3") // TODO: CPU exception
   }
+
 }
 
 inline fun RiscVInstruction.load_fp(cpu: CPU) {

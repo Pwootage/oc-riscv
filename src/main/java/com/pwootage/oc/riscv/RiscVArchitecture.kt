@@ -78,7 +78,7 @@ class RiscVArchitecture(val machine: Machine) : Architecture {
   private fun createVM(): RiscWM {
     return RiscWM().apply {
       // TODO: based on RAM size
-      val ram = RAMMemoryDevice(0x8000_0000u, 10000u)
+      val ram = RAMMemoryDevice(0x8000_0000u, 8u * 1024u * 1024u) // 8mb
       mmu.physicalMemorySpace.addDevice(ram)
       mmu.physicalMemorySpace.addDevice(
         RAMSizeDevice(ram)
