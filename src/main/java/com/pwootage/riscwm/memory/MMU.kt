@@ -1,45 +1,71 @@
 package com.pwootage.riscwm.memory
 
+import com.pwootage.riscwm.CPU.Hart
+import com.pwootage.riscwm.CPU.PRIV_MODES
 import com.pwootage.riscwm.memory.devices.RAMMemoryDevice
 
-class MMU: MemoryRead, MemoryWrite {
-    val PHYS_BITS = 32
-    val VIRT_BITS = 32
-    val physicalMemorySpace = PhysicalMemorySpace(
-        start = 0u,
-        length = 1u shl PHYS_BITS
-    )
-    val virtual_memory_enabled = false
+class MMU {
+  val PHYS_BITS = 32
+  val physicalMemorySpace = PhysicalMemorySpace(
+    start = 0u,
+    length = 1u shl PHYS_BITS
+  )
+  val virtualMemory = VirtualMemoryManager(physicalMemorySpace)
 
-    override fun read8(offset: UInt): Byte {
-        return physicalMemorySpace.read8(offset)
+  inline fun translate(hart: Hart, address: UInt, xwr: Int): UInt {
+    if (hart.priv_mode > PRIV_MODES.supervisor) {
+      return address
     }
+    return if (hart.satp_mode == 0) {
+      address
+    } else {
+      //sv32
+      virtualMemory.translate(hart, address, xwr)
+    }
+  }
 
-    override fun read16(offset: UInt): Short {
-        return physicalMemorySpace.read16(offset)
-    }
+  fun fetchInstruction(hart: Hart, offset: UInt): Int {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.execute)
+    return physicalMemorySpace.read32(addr)
+  }
 
-    override fun read32(offset: UInt): Int {
-        return physicalMemorySpace.read32(offset)
-    }
+  fun read8(hart: Hart, offset: UInt): Byte {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.read)
+    return physicalMemorySpace.read8(addr)
+  }
 
-    override fun read64(offset: UInt): Long {
-        return physicalMemorySpace.read64(offset)
-    }
+  fun read16(hart: Hart, offset: UInt): Short {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.read)
+    return physicalMemorySpace.read16(addr)
+  }
 
-    override fun write8(offset: UInt, value: Byte) {
-        physicalMemorySpace.write8(offset, value)
-    }
+  fun read32(hart: Hart, offset: UInt): Int {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.read)
+    return physicalMemorySpace.read32(addr)
+  }
 
-    override fun write16(offset: UInt, value: Short) {
-        physicalMemorySpace.write16(offset, value)
-    }
+  fun read64(hart: Hart, offset: UInt): Long {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.read)
+    return physicalMemorySpace.read64(addr)
+  }
 
-    override fun write32(offset: UInt, value: Int) {
-        physicalMemorySpace.write32(offset, value)
-    }
+  fun write8(hart: Hart, offset: UInt, value: Byte) {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.write)
+    physicalMemorySpace.write8(addr, value)
+  }
 
-    override fun write64(offset: UInt, value: Long) {
-        physicalMemorySpace.write64(offset, value)
-    }
+  fun write16(hart: Hart, offset: UInt, value: Short) {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.write)
+    physicalMemorySpace.write16(addr, value)
+  }
+
+  fun write32(hart: Hart, offset: UInt, value: Int) {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.write)
+    physicalMemorySpace.write32(addr, value)
+  }
+
+  fun write64(hart: Hart, offset: UInt, value: Long) {
+    val addr = translate(hart, offset, MEMORY_ACCESS_TYPE.write)
+    physicalMemorySpace.write64(addr, value)
+  }
 }

@@ -239,22 +239,22 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
         0b001 -> { // C.FLD
           val imm = (bits(10, 12) shl 3) or (bits(5, 6) shl 6)
           val addr = hart.x[c_rs1_prime] + imm
-          hart.d[c_rs2_prime] = hart.vm.mmu.read64(addr.toUInt())
+          hart.d[c_rs2_prime] = hart.vm.mmu.read64(hart, addr.toUInt())
         }
         0b010 -> { // C.LW
           val imm = (bits(6) shl 2) or (bits(10, 12) shl 3) or (bits(5) shl 6)
           val addr = hart.x[c_rs1_prime] + imm
-          hart.setx(c_rs2_prime, hart.vm.mmu.read32(addr.toUInt()))
+          hart.setx(c_rs2_prime, hart.vm.mmu.read32(hart, addr.toUInt()))
         }
         0b101 -> { // C.FSD
           val imm = (bits(10, 12) shl 3) or (bits(5, 6) shl 6)
           val addr = hart.x[c_rs1_prime] + imm
-          hart.vm.mmu.write64(addr.toUInt(), hart.d[c_rs2_prime])
+          hart.vm.mmu.write64(hart, addr.toUInt(), hart.d[c_rs2_prime])
         }
         0b110 -> { // C.SW
           val imm = (bits(6) shl 2) or (bits(10, 12) shl 3) or (bits(5) shl 6)
           val addr = hart.x[c_rs1_prime] + imm
-          hart.vm.mmu.write32(addr.toUInt(), hart.x[c_rs2_prime])
+          hart.vm.mmu.write32(hart, addr.toUInt(), hart.x[c_rs2_prime])
         }
         else -> invalidInstruction(hart)
       }
@@ -310,38 +310,38 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
           when (bits(10, 11)) {
             0b00 -> { // C.SRLI
               val shamt = bits(2, 6)
-              val v = hart.x[c_rs1] ushr shamt
-              hart.setx(c_rs1, v)
+              val v = hart.x[c_rs1_prime] ushr shamt
+              hart.setx(c_rs1_prime, v)
             }
             0b01 -> { //C.SRAI
               val shamt = bits(2, 6)
-              val v = hart.x[c_rs1] shr shamt
-              hart.setx(c_rs1, v)
+              val v = hart.x[c_rs1_prime] shr shamt
+              hart.setx(c_rs1_prime, v)
             }
             0b10 -> { //C.ANDI
               val imm = bits(2, 6) or ((bits(12) shl 31) shr (31 - 5))
-              val v = hart.x[c_rs1] and imm
-              hart.setx(c_rs1, v)
+              val v = hart.x[c_rs1_prime] and imm
+              hart.setx(c_rs1_prime, v)
             }
             0b11 -> {
               when (bits(12)) {
                 0b0 -> {
                   when (bits(5, 6)) {
                     0b00 -> { // C.SUB
-                      val res = hart.x[c_rs1] - hart.x[c_rs2]
-                      hart.setx(c_rs1, res)
+                      val res = hart.x[c_rs1_prime] - hart.x[c_rs2_prime]
+                      hart.setx(c_rs1_prime, res)
                     }
                     0b01 -> { // C.XOR
-                      val res = hart.x[c_rs1] xor hart.x[c_rs2]
-                      hart.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] xor hart.x[c_rs2_prime]
+                      hart.setx(c_rs1_prime, res)
                     }
                     0b10 -> { // C.OR
-                      val res = hart.x[c_rs1] or hart.x[c_rs2]
-                      hart.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] or hart.x[c_rs2_prime]
+                      hart.setx(c_rs1_prime, res)
                     }
                     0b11 -> { // C.AND
-                      val res = hart.x[c_rs1] and hart.x[c_rs2]
-                      hart.setx(c_rs1, res)
+                      val res = hart.x[c_rs1] and hart.x[c_rs2_prime]
+                      hart.setx(c_rs1_prime, res)
                     }
                   }
                 }
@@ -394,13 +394,13 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
       when (c_funct3) {
         0b000 -> { //C.SLLI
           val shamt = bits(2, 6)
-          val v = hart.x[c_rs1] shl shamt
-          hart.setx(c_rs1, v)
+          val v = hart.x[c_rs1_prime] shl shamt
+          hart.setx(c_rs1_prime, v)
         }
         0b001 -> { //C.FLDSP
           val imm = (bits(2, 4) shl 6) or (bits(12) shl 5) or (bits(5, 6) shl 3)
           val addr = imm + hart.x[2]
-          hart.d[c_rs1] = hart.vm.mmu.read64(addr.toUInt())
+          hart.d[c_rs1] = hart.vm.mmu.read64(hart, addr.toUInt())
         }
         0b010 -> { //C.LWSP
           if (c_rs1 == 0) {
@@ -408,7 +408,7 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
           }
           val imm = (bits(2, 3) shl 6) or (bits(12) shl 5) or (bits(4, 6) shl 2)
           val addr = imm + hart.x[2]
-          hart.setx(c_rs1, hart.vm.mmu.read32(addr.toUInt()))
+          hart.setx(c_rs1, hart.vm.mmu.read32(hart, addr.toUInt()))
         }
         0b100 -> {
           when (bits(12)) {
@@ -446,12 +446,12 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
         0b101 -> { //C.FSDSP
           val imm = (bits(10, 12) shl 3) or (bits(7, 9) shl 6)
           val addr = imm + hart.x[2]
-          hart.vm.mmu.write64(addr.toUInt(), hart.d[c_rs2])
+          hart.vm.mmu.write64(hart, addr.toUInt(), hart.d[c_rs2])
         }
         0b110 -> { //C.SWSP
           val imm = (bits(9, 12) shl 2) or (bits(7, 8) shl 6)
           val addr = imm + hart.x[2]
-          hart.vm.mmu.write32(addr.toUInt(), hart.x[c_rs2])
+          hart.vm.mmu.write32(hart, addr.toUInt(), hart.x[c_rs2])
         }
         else -> invalidInstruction(hart)
       }
@@ -604,11 +604,11 @@ inline fun RiscVInstruction.load(hart: Hart) {
   // Can't optimize x0 out, since it still will read the memory; this means it can have side effects for MMIO
   val addr = (hart.x[rs1] + immed_i).toUInt()
   val v: Int = when (funct3) {
-    OPCODES.LOAD_FUNCT3.LW -> hart.vm.mmu.read32(addr)
-    OPCODES.LOAD_FUNCT3.LB -> hart.vm.mmu.read8(addr).toInt()
-    OPCODES.LOAD_FUNCT3.LBU -> hart.vm.mmu.read8(addr).toInt() and 0xFF
-    OPCODES.LOAD_FUNCT3.LH -> hart.vm.mmu.read16(addr).toInt()
-    OPCODES.LOAD_FUNCT3.LHU -> hart.vm.mmu.read16(addr).toInt() and 0xFFFF
+    OPCODES.LOAD_FUNCT3.LW -> hart.vm.mmu.read32(hart, addr)
+    OPCODES.LOAD_FUNCT3.LB -> hart.vm.mmu.read8(hart, addr).toInt()
+    OPCODES.LOAD_FUNCT3.LBU -> hart.vm.mmu.read8(hart, addr).toInt() and 0xFF
+    OPCODES.LOAD_FUNCT3.LH -> hart.vm.mmu.read16(hart, addr).toInt()
+    OPCODES.LOAD_FUNCT3.LHU -> hart.vm.mmu.read16(hart, addr).toInt() and 0xFFFF
     else -> invalidInstruction(hart)
   }
   hart.setx(rd, v)
@@ -618,9 +618,9 @@ inline fun RiscVInstruction.store(hart: Hart) {
   val value = hart.x[rs2]
   val addr = (hart.x[rs1] + immed_s).toUInt()
   when (funct3) {
-    OPCODES.STORE_FUNCT3.SW -> hart.vm.mmu.write32(addr, value)
-    OPCODES.STORE_FUNCT3.SB -> hart.vm.mmu.write8(addr, value.toByte())
-    OPCODES.STORE_FUNCT3.SH -> hart.vm.mmu.write16(addr, value.toShort())
+    OPCODES.STORE_FUNCT3.SW -> hart.vm.mmu.write32(hart, addr, value)
+    OPCODES.STORE_FUNCT3.SB -> hart.vm.mmu.write8(hart, addr, value.toByte())
+    OPCODES.STORE_FUNCT3.SH -> hart.vm.mmu.write16(hart, addr, value.toShort())
     else -> invalidInstruction(hart)
   }
 }
@@ -763,11 +763,11 @@ inline fun RiscVInstruction.load_fp(hart: Hart) {
   val addr = (hart.x[rs1] + immed_i).toUInt()
   when (funct3) {
     OPCODES.LOAD_FP_FUNCT3.LOAD_FLOAT -> {
-      val v = hart.vm.mmu.read32(addr).toLong()
+      val v = hart.vm.mmu.read32(hart, addr).toLong()
       hart.d[rd] = v or 0xFFFF_FFFF_0000_0000UL.toLong()
     }
     OPCODES.LOAD_FP_FUNCT3.LOAD_DOUBLE -> {
-      val v = hart.vm.mmu.read64(addr)
+      val v = hart.vm.mmu.read64(hart, addr)
       hart.d[rd] = v
     }
     else -> invalidInstruction(hart)
@@ -779,11 +779,11 @@ inline fun RiscVInstruction.store_fp(hart: Hart) {
   when (funct3) {
     OPCODES.STORE_FP_FUNCT3.STORE_FLOAT -> {
       val v: Int = hart.d[rs2].toInt()
-      hart.vm.mmu.write32(addr, v)
+      hart.vm.mmu.write32(hart, addr, v)
     }
     OPCODES.STORE_FP_FUNCT3.STORE_DOUBLE -> {
       val v = hart.d[rs2]
-      hart.vm.mmu.write64(addr, v)
+      hart.vm.mmu.write64(hart, addr, v)
     }
     else -> invalidInstruction(hart)
   }

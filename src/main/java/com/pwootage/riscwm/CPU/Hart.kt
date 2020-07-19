@@ -101,6 +101,11 @@ class Hart(val vm: RiscWM, val hartID: Int) {
   var ucause = 0 // User cause register
   var utval = 0 // User trap value
 
+  // Memory protection
+  var satp_mode = 0
+  var satp_asid = 0
+  var satp_ppn = 0
+
   /** Wait for interrupt */
   val wfi = 0
 
@@ -313,7 +318,7 @@ class Hart(val vm: RiscWM, val hartID: Int) {
   }
 
   fun cycle() {
-    val instr = RiscVInstruction(vm.mmu.read32(pc))
+    val instr = RiscVInstruction(vm.mmu.fetchInstruction(this, pc))
     instr.exec(this)
   }
 
@@ -354,7 +359,6 @@ class Hart(val vm: RiscWM, val hartID: Int) {
       // Machine CSRs
       CSR_ID.misa, CSR_ID.mvendorid, CSR_ID.marchid, CSR_ID.mimpid -> 0
       CSR_ID.mhartid -> hartID
-      CSR_ID.mstatus -> readMachineStatusRaw()
       CSR_ID.mip -> readMachineInterruptPending()
       CSR_ID.mie -> readMachineInterruptEnable()
       CSR_ID.medeleg -> medeleg
@@ -362,12 +366,14 @@ class Hart(val vm: RiscWM, val hartID: Int) {
       CSR_ID.sedeleg -> sedeleg
       CSR_ID.sideleg -> sideleg
       // Machine trap
+      CSR_ID.mstatus -> readMachineStatusRaw()
       CSR_ID.mscratch -> mscratch
       CSR_ID.mepc -> mepc
       CSR_ID.mcause -> mcause
       CSR_ID.mtval -> mtval
       CSR_ID.mtvec -> mtvec_base or mtvec_mode
       // Supervisor trap
+      CSR_ID.sstatus -> readSupervisorStatusRaw()
       CSR_ID.sscratch -> sscratch
       CSR_ID.sepc -> sepc
       CSR_ID.scause -> scause
@@ -379,6 +385,8 @@ class Hart(val vm: RiscWM, val hartID: Int) {
       CSR_ID.ucause -> ucause
       CSR_ID.utval -> utval
       CSR_ID.utvec -> utvec_base or utvec_mode
+      // Memory protection
+      CSR_ID.satp -> (satp_mode shl 31) or (satp_asid shl 22) or satp_ppn
       else -> csr[csrNum]
     }
   }
@@ -390,7 +398,6 @@ class Hart(val vm: RiscWM, val hartID: Int) {
         cycle = (cycle and 0xFFFF_FFFF_0000_0000UL.toLong()) or (value.toLong() and 0xFFFF_FFFFL)
       CSR_ID.mcycleh, CSR_ID.minstreth ->
         cycle = (cycle and 0xFFFF_FFFFL) or ((value.toLong() and 0xFFFF_FFFFL) shl 32)
-      CSR_ID.mstatus -> writeMachineStatusRaw(value)
       CSR_ID.mip -> writeMachineInterruptPending(value)
       CSR_ID.mie -> writeMachineInterruptEnable(value)
       CSR_ID.medeleg -> medeleg = value
@@ -398,6 +405,7 @@ class Hart(val vm: RiscWM, val hartID: Int) {
       CSR_ID.sedeleg -> sedeleg = value
       CSR_ID.sideleg -> sideleg = value
       // Machine trap
+      CSR_ID.mstatus -> writeMachineStatusRaw(value)
       CSR_ID.mscratch -> mscratch = value
       CSR_ID.mepc -> mepc = value
       CSR_ID.mcause -> mcause = value
@@ -407,6 +415,7 @@ class Hart(val vm: RiscWM, val hartID: Int) {
         mtvec_mode = value and 0b11
       }
       // Supervisor trap
+      CSR_ID.sstatus -> writeSupervisorStatusRaw(value)
       CSR_ID.sscratch -> sscratch = value
       CSR_ID.sepc -> sepc = value
       CSR_ID.scause -> scause = value
@@ -423,6 +432,12 @@ class Hart(val vm: RiscWM, val hartID: Int) {
       CSR_ID.utvec -> {
         utvec_base = value and (0b11.inv())
         utvec_mode = value and 0b11
+      }
+      // Memory protection
+      CSR_ID.satp -> {
+        satp_mode = (value ushr 31) and 0b1
+        satp_asid = (value ushr 22) and 0x1FF
+        satp_ppn = value and 0x3FFFFF
       }
       else -> csr[csrNum] = value
     }
@@ -484,6 +499,32 @@ class Hart(val vm: RiscWM, val hartID: Int) {
     SPIE = (value ushr 5) and 0b1
     UPIE = (value ushr 4) and 0b1
     MIE = (value ushr 3) and 0b1
+    SIE = (value ushr 1) and 0b1
+    UIE = (value ushr 0) and 0b1
+  }
+
+  private fun readSupervisorStatusRaw(): Int {
+    return (SD shr 31) or
+      (MXR shr 19) or
+      (SUM shr 18) or
+      (XS shr 15) or
+      (FS shr 13) or
+      (SPP shr 8) or
+      (SPIE shr 5) or
+      (UPIE shr 4) or
+      (SIE shr 1) or
+      (UIE shr 0)
+  }
+
+  private fun writeSupervisorStatusRaw(value: Int) {
+//    SD = (value ushr 31) and 0b1
+    MXR = (value ushr 19) and 0b1
+    SUM = (value ushr 18) and 0b1
+    //XS = (value ushr 15) and 0b11
+    //FS = (value ushr 13) and 0b11
+    SPP = (value ushr 8) and 0b1
+    SPIE = (value ushr 5) and 0b1
+    UPIE = (value ushr 4) and 0b1
     SIE = (value ushr 1) and 0b1
     UIE = (value ushr 0) and 0b1
   }
