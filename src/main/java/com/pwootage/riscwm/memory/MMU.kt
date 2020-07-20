@@ -3,6 +3,7 @@ package com.pwootage.riscwm.memory
 import com.pwootage.riscwm.CPU.Hart
 import com.pwootage.riscwm.CPU.PRIV_MODES
 import com.pwootage.riscwm.memory.devices.RAMMemoryDevice
+import java.util.concurrent.locks.ReentrantLock
 
 class MMU {
   val PHYS_BITS = 32
@@ -11,6 +12,7 @@ class MMU {
     length = 1u shl PHYS_BITS
   )
   val virtualMemory = VirtualMemoryManager(physicalMemorySpace)
+  val atomicLock = ReentrantLock()
 
   inline fun translate(hart: Hart, address: UInt, xwr: Int): UInt {
     if (hart.priv_mode > PRIV_MODES.supervisor) {

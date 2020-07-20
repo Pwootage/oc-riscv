@@ -1,9 +1,10 @@
 package com.pwootage.riscwm.CPU.instr
 
 import com.pwootage.riscwm.CPU.*
-import java.lang.Float.min
 import java.lang.IllegalStateException
+import kotlin.concurrent.withLock
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sqrt
 import kotlin.math.withSign
 
@@ -176,6 +177,24 @@ object OPCODES {
     val FMV_X_V = 0b000
     val FCLASS = 0b001
   }
+
+  val AMO = 0b0101111
+
+  object AMO_FUNCT3 {
+    val W = 0b010
+  }
+
+  object AMO_FUNCT5 {
+    val AMOSWAP = 0b00001
+    val AMOADD = 0b00000
+    val AMOXOR = 0b00100
+    val AMOAND = 0b01100
+    val AMOOR = 0b01000
+    val AMOMIN = 0b10000
+    val AMOMAX = 0b10100
+    val AMOMINU = 0b11000
+    val AMOMAXU = 0b11100
+  }
 }
 
 val CANONICAL_NAN = Float.NaN
@@ -213,6 +232,7 @@ fun RiscVInstruction.exec(hart: Hart) {
       OPCODES.LOAD_FP -> load_fp(hart)
       OPCODES.STORE_FP -> store_fp(hart)
       OPCODES.OP_FP -> op_fp(hart)
+      OPCODES.AMO -> amo(hart)
       else -> invalidInstruction(hart)
     }
     if (hart.update_pc) {
@@ -332,15 +352,15 @@ fun RiscVInstruction.exec_compressed(hart: Hart, op: Int) {
                       hart.setx(c_rs1_prime, res)
                     }
                     0b01 -> { // C.XOR
-                      val res = hart.x[c_rs1] xor hart.x[c_rs2_prime]
+                      val res = hart.x[c_rs1_prime] xor hart.x[c_rs2_prime]
                       hart.setx(c_rs1_prime, res)
                     }
                     0b10 -> { // C.OR
-                      val res = hart.x[c_rs1] or hart.x[c_rs2_prime]
+                      val res = hart.x[c_rs1_prime] or hart.x[c_rs2_prime]
                       hart.setx(c_rs1_prime, res)
                     }
                     0b11 -> { // C.AND
-                      val res = hart.x[c_rs1] and hart.x[c_rs2_prime]
+                      val res = hart.x[c_rs1_prime] and hart.x[c_rs2_prime]
                       hart.setx(c_rs1_prime, res)
                     }
                   }
@@ -884,5 +904,32 @@ inline fun RiscVInstruction.op_fp(hart: Hart) {
   } else {
     // TODO: double
     invalidInstruction(hart)
+  }
+}
+
+inline fun RiscVInstruction.amo(hart: Hart) {
+  when (funct3) {
+    OPCODES.AMO_FUNCT3.W -> {
+      hart.vm.mmu.atomicLock.withLock {
+        val addr = hart.x[rs1].toUInt()
+        val src = hart.x[rs2]
+        val mem = hart.vm.mmu.read32(hart, addr)
+        val res = when (funct5) {
+          OPCODES.AMO_FUNCT5.AMOSWAP -> src
+          OPCODES.AMO_FUNCT5.AMOADD -> mem + src
+          OPCODES.AMO_FUNCT5.AMOAND -> mem and src
+          OPCODES.AMO_FUNCT5.AMOOR -> mem or src
+          OPCODES.AMO_FUNCT5.AMOXOR -> mem xor src
+          OPCODES.AMO_FUNCT5.AMOMAX -> max(mem, src)
+          OPCODES.AMO_FUNCT5.AMOMAXU -> max(mem.toUInt(), src.toUInt()).toInt()
+          OPCODES.AMO_FUNCT5.AMOMIN -> min(mem, src)
+          OPCODES.AMO_FUNCT5.AMOMINU -> min(mem.toUInt(), src.toUInt()).toInt()
+          else -> invalidInstruction(hart)
+        }
+        hart.vm.mmu.write32(hart, addr, res)
+        hart.setx(rd, mem)
+      }
+    }
+    else -> invalidInstruction(hart)
   }
 }
