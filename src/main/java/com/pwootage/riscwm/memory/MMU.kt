@@ -30,11 +30,11 @@ class MMU {
   }
 
   fun setReservation(address: UInt) {
-    reservation.set(address.toInt())
+    reservation.set((address and 0xFFFF_FFF0u).toInt())
   }
 
   fun reservationValid(address: UInt): Boolean {
-    return reservation.compareAndSet(address.toInt(), 0)
+    return reservation.compareAndSet((address and 0xFFFF_FFF0u).toInt(), 0)
   }
 
   private inline fun handle_reservation(address: UInt) {

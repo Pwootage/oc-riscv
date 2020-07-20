@@ -912,26 +912,33 @@ inline fun RiscVInstruction.op_fp(hart: Hart) {
 inline fun RiscVInstruction.amo(hart: Hart) {
   when (funct3) {
     OPCODES.AMO_FUNCT3.W -> {
+      // handle these seperately
+      when (funct5) {
+        OPCODES.AMO_FUNCT5.LR -> {
+          val addr = hart.x[rs1].toUInt()
+          val mem = hart.vm.mmu.read32(hart, addr)
+          hart.vm.mmu.setReservation(addr)
+          hart.setx(rd, mem)
+          return
+        }
+        OPCODES.AMO_FUNCT5.SC -> {
+          val addr = hart.x[rs1].toUInt()
+          val src = hart.x[rs2]
+          val success = hart.vm.mmu.reservationValid(addr)
+          if (success) {
+            hart.vm.mmu.write32(hart, addr, src)
+            hart.setx(rd, 0)
+          } else {
+            hart.setx(rd, 1)
+          }
+          return
+        }
+      }
       hart.vm.mmu.atomicLock.withLock {
         val addr = hart.x[rs1].toUInt()
         val src = hart.x[rs2]
         val mem = hart.vm.mmu.read32(hart, addr)
-        var rdValue = mem
         val res = when (funct5) {
-          OPCODES.AMO_FUNCT5.LR -> {
-            hart.vm.mmu.setReservation(addr)
-            null
-          }
-          OPCODES.AMO_FUNCT5.SC -> {
-            val success = hart.vm.mmu.reservationValid(addr)
-            if (success) {
-              rdValue = 1
-              src
-            } else {
-              rdValue = 0
-              null
-            }
-          }
           OPCODES.AMO_FUNCT5.AMOSWAP -> src
           OPCODES.AMO_FUNCT5.AMOADD -> mem + src
           OPCODES.AMO_FUNCT5.AMOAND -> mem and src
@@ -943,8 +950,8 @@ inline fun RiscVInstruction.amo(hart: Hart) {
           OPCODES.AMO_FUNCT5.AMOMINU -> min(mem.toUInt(), src.toUInt()).toInt()
           else -> invalidInstruction(hart)
         }
-        res?.let { hart.vm.mmu.write32(hart, addr, it) }
-        hart.setx(rd, rdValue)
+        hart.vm.mmu.write32(hart, addr, res)
+        hart.setx(rd, mem)
       }
     }
     else -> invalidInstruction(hart)
