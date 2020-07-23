@@ -19,6 +19,7 @@ inline class PageTableEntry(val entry: Int) {
   //  inline val dirty: Boolean get() = ((entry shl 7) and 0b1) == 1
   inline val ppn0: UInt get() = ((entry shr 10) and 0x3FF).toUInt()
   inline val ppn1: UInt get() = ((entry shr 20) and 0xFFF).toUInt()
+  inline val ppn: UInt get() = ((entry shr 10) and 0x3FFFFF).toUInt()
 }
 
 inline class VirtualAddress(val address: UInt) {
@@ -68,7 +69,7 @@ class VirtualMemoryManager(val physicalMemorySpace: PhysicalMemorySpace) {
   private fun traversePages(hart: Hart, address: UInt, rwxBit: Int): UInt {
     // SEE: risc-v privileged spec section 4.3.2
     val va = VirtualAddress(address)
-    var a = hart.satp_ppn.toUInt()
+    var a = hart.satp_ppn.toUInt() * PAGE_SIZE
     var pteAddress = a + va.vpn1 * PTE_SIZE
     var pte = PageTableEntry(physicalMemorySpace.read32(pteAddress))
     if (!pte.valid) {
@@ -76,7 +77,7 @@ class VirtualMemoryManager(val physicalMemorySpace: PhysicalMemorySpace) {
     }
     var pteXWR = pte.xwr
     val pa = if (pteXWR == 0) { // Branch node
-      a = pte.ppn1 * PAGE_SIZE
+      a = pte.ppn * PAGE_SIZE
       pteAddress = a + va.vpn0 * PTE_SIZE
       pte = PageTableEntry(physicalMemorySpace.read32(pteAddress))
       if (!pte.valid) {
@@ -87,13 +88,13 @@ class VirtualMemoryManager(val physicalMemorySpace: PhysicalMemorySpace) {
         pageFault(hart, va.address, rwxBit)
       }
       // Ignore a/d for now
-      va.pageOffset or (va.vpn0 shl 12) or (pte.ppn0 shl 22)
+      va.pageOffset or (pte.ppn0 shl 12) or (pte.ppn1 shl 22)
     } else {
       // superpage
       if (pte.ppn0 != 0u) { // verify superpage is aligned
         pageFault(hart, va.address, rwxBit)
       }
-      va.pageOffset or (pte.ppn0 shl 12) or (pte.ppn0 shl 22)
+      va.pageOffset or (pte.ppn0 shl 12) or (pte.ppn1 shl 22)
     }
     if ((1 shl rwxBit) and pteXWR == 0) { // Check access
       pageFault(hart, va.address, rwxBit)
